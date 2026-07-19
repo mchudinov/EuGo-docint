@@ -1,3 +1,4 @@
+using DocInt.Api.Configuration;
 using Serilog;
 using Serilog.Debugging;
 
@@ -13,6 +14,7 @@ try
     var builder = WebApplication.CreateBuilder(args);
 
     builder.AddServiceDefaults();
+    builder.AddDocIntOptions();
 
     // Serilog replaces the default logging providers; ServiceDefaults' OTel traces/metrics
     // stay active. Under Aspire (OTEL_EXPORTER_OTLP_ENDPOINT set) also ship logs via OTLP.
