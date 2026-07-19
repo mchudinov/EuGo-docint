@@ -1,0 +1,80 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this repo is
+
+**EuGo-docint** (*EuGo Document Intelligence*) — an independent, **stateless, cluster-internal document-understanding service**: files in → Markdown, tables with typed numeric cells, image descriptions, per-file warnings/errors out. It renders no compliance judgment and stores nothing. It is called by EuGo-Web (and later EuGo-mcp) over `POST /v1/extract` on a shared AKS cluster, and is never exposed via ingress.
+
+**Current state: pre-T1 scaffold.** `src/`, `tests/`, `docs/` are empty and there are no commits yet. The build plan and spec live in the sibling Obsidian vault:
+
+- Plan (task level, T1–T8): `../EuGo-Obsidian/plans/eugo-docint-plan.md`
+- Spec (Decision 12): `../EuGo-Obsidian/plans/Plan-A-Step-1/12-decision-eugo-docint.md`
+
+Sibling repos: `../EuGo-mcp` (conventions to mirror — its `CLAUDE.md` is the reference), `../EuGo-web` (the consumer), `../EuGo-infra`.
+
+**Tech stack:** .NET 10 · ASP.NET Core minimal API · `Azure.AI.DocumentIntelligence` (Layout → Markdown) · OpenXML (XLSX typed cells) · Azure OpenAI Foundry utility model (image description) · OTel + Serilog · Docker → ACR → AKS.
+
+## Commands
+
+The solution will live at `src/DocInt.slnx` (not the repo root) — always target it explicitly:
+
+```bash
+dotnet restore src/DocInt.slnx
+dotnet build --no-restore src/DocInt.slnx
+dotnet test --no-build src/DocInt.slnx
+```
+
+That exact three-step sequence, in that order, is the enforced gate before any merge — `--no-restore` / `--no-build` keep the signal honest (a test failure is a test failure, not a stale build).
+
+Run a single test: `dotnet test --no-build src/DocInt.slnx --filter "FullyQualifiedName~TestName"`.
+
+Local dev is plain `dotnet run --project src/DocInt.Api` — docint deliberately has **no Aspire AppHost** (its only dependencies are Azure services). Credentials via user-secrets/env locally, Workload Identity on AKS. Config keys: `DocumentIntelligence:Endpoint`, `AzureOpenAI:*`.
+
+## Architecture
+
+Planned layout (locked by the plan — keep the decomposition):
+
+```
+src/DocInt.slnx
+└─ DocInt.Api/          ASP.NET Core minimal API (net10.0)
+   ├─ Contracts/        request/response DTOs + OpenAPI
+   ├─ Engines/          EngineRouter · LayoutEngine · SpreadsheetEngine · VisionEngine
+   ├─ Validation/       size/type caps, kind detection
+   └─ Telemetry/        OTel + Serilog config, pages-processed metric
+tests/DocInt.Tests/     contract + golden-file tests (env-gated live smoke)
+└─ golden/              text PDF · scanned PDF · DOCX · PPTX · HTML · BoM XLSX · photo · corrupt file
+deploy/                 K8s manifests (Deployment, ClusterIP Service, NetworkPolicy, Workload Identity)
+Dockerfile              chiseled aspnet, mirrors EuGo-mcp's
+```
+
+**Contract v1** (frozen at T2; `/v1` is internal-may-change until EuGo-mcp becomes the second consumer):
+`POST /v1/extract` — multipart, N files + per-file hints (filename, content type, optional purpose hint e.g. `bom`, `photo`) → synchronous
+`200 { files: [ { name, kind, markdown?, tables?, imageDescription?, warnings[], error? } ] }` with `kind ∈ pdf | docx | pptx | html | xlsx | image`.
+
+**Engines** — all implement the internal seam `IExtractionEngine`, kind-keyed behind `EngineRouter`:
+
+| Kind | Engine |
+|---|---|
+| PDF (incl. scanned), DOCX, PPTX, HTML | DI `prebuilt-layout` → Markdown |
+| XLSX | OpenXML typed cells + Markdown rendering (`tables` carries the typed rows — numeric fidelity is the point) |
+| JPG/PNG | Vision description via Foundry utility model — **factual observations only**, no classification language |
+
+**Task order:** T1 scaffold → T2 contract/stubs (freezes the wire contract), then T3 layout · T4 spreadsheet · T5 vision in parallel; T6 hardening; T7 AKS deploy (blocked on infra). EuGo-Web integration (T8) proceeds against T2's stubs and lives in the EuGo-Web plan.
+
+## Hard constraints (from the spec — apply to every change)
+
+- **Facts, never meaning.** Document-level language only: no `EvidenceBundle`, no categories, no compliance/classification semantics anywhere in the API or code.
+- **Stateless & storage-free.** Bytes in, results out; no document persistence; docint must never grow into a document store.
+- **No document content in logs** — filenames and sizes are fine, content never. Serilog gets a content-redaction rule (T6).
+- **Per-file success/failure inside a 200.** One corrupt file yields its own `error` entry, never a failed call; request-level errors only for malformed requests (400).
+- **EU-region Azure resources only**; Workload Identity on AKS; never secrets in source or tracked config.
+
+## Conventions (mirror EuGo-mcp)
+
+- **Workflow per task:** cut a per-step branch → TDD (failing test first) → `restore` → `build --no-restore` → `test --no-build` → merge to `main` once green → delete the branch. Never develop directly on `main`; never merge red.
+- The `.claude/agents/dotnet-developer.md` agent encodes the full PR-based variant (four-section PR bodies, `agent/<slug>` branches); use it for dispatched tasks. When the plan's lighter merge-to-main flow and the agent's never-merge rule conflict, the plan's flow wins for routine steps unless the user asks for PRs.
+- Don't skip or weaken tests over missing infrastructure (no Azure credentials, no Docker) — run the subset that can execute and list what was blocked. Live-smoke tests are env-gated by design.
+- Testing is golden-file driven: contract tests assert response shapes with Azure stubbed; the env-gated live smoke suite proves OCR (scanned PDF), numeric fidelity (BoM XLSX), and lens/UV cues on the photo.
+- `net10.0`, `Nullable` and `ImplicitUsings` enabled across projects.
+- **Use the Context7 MCP server for documentation lookups** (Azure.AI.DocumentIntelligence, OpenXML, Azure OpenAI, ASP.NET Core) rather than memory — version-accurate docs matter here.
