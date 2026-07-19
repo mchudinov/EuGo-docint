@@ -48,7 +48,7 @@ src/DocInt.slnx
 tests/DocInt.Tests/     contract + golden-file tests (env-gated live smoke)
 └─ golden/              text PDF · scanned PDF · DOCX · PPTX · HTML · BoM XLSX · photo · corrupt file
 tools/make-golden/      one-off generator for the golden fixtures
-Dockerfile              chiseled aspnet, mirrors EuGo-mcp's (port 8090)
+Dockerfile              chiseled aspnet, multi-arch (amd64/arm64), mirrors EuGo-mcp's (port 8090)
 ```
 
 K8s manifests (`deploy/`) are **not** in this repo — deployment is owned by EuGo-infra.

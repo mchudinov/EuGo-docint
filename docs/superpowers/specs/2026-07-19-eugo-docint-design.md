@@ -12,7 +12,7 @@ A stateless, cluster-internal document-understanding service: files in → Markd
 
 ## Solution structure
 
-```
+```text
 src/DocInt.slnx
 ├─ DocInt.Api/          ASP.NET Core minimal API (net10.0)
 │  ├─ Contracts/        request/response DTOs + OpenAPI
@@ -24,8 +24,8 @@ src/DocInt.slnx
 tests/DocInt.Tests/     xUnit; contract + golden + env-gated live smoke
 └─ golden/              committed binary fixtures (see Testing)
 tools/make-golden/      one-off generator for the golden fixtures
-Dockerfile              chiseled aspnet, mirrors EuGo-mcp's
-.github/workflows/ci.yml
+Dockerfile              chiseled aspnet, multi-arch (amd64/arm64), mirrors EuGo-mcp's
+.github/workflows/ci.yml   build+test job · multi-arch docker job
 ```
 
 All projects `net10.0`, `Nullable` + `ImplicitUsings` enabled.
@@ -40,15 +40,15 @@ All projects `net10.0`, `Nullable` + `ImplicitUsings` enabled.
 
 Engines never touch Azure SDKs directly. Two thin adapter interfaces are both the test seam and the credential seam:
 
-- `ILayoutAnalysisClient` — wraps `Azure.AI.DocumentIntelligence` (`prebuilt-layout`, Markdown output).
-- `IVisionChatClient` — wraps Azure OpenAI chat completions (image content part).
+* `ILayoutAnalysisClient` — wraps `Azure.AI.DocumentIntelligence` (`prebuilt-layout`, Markdown output).
+* `IVisionChatClient` — wraps Azure OpenAI chat completions (image content part).
 
 Credentials per client: endpoint + `ApiKey` configured → key credential; endpoint without key → `DefaultAzureCredential` (Workload Identity on AKS later; `az login`/user-secrets locally). Never secrets in source or tracked config.
 
 **Lazy-required config:** the service boots and serves `/healthz` with no Azure config. A file whose engine lacks configuration gets a per-file `engine_unconfigured` error. This is what makes the stub-first period workable.
 
 | Key | Default | Meaning |
-|---|---|---|
+| --- | --- | --- |
 | `DocumentIntelligence:Endpoint`, `:ApiKey` | — | DI resource; key optional |
 | `AzureOpenAI:Endpoint`, `:ApiKey` | — | AOAI/Foundry resource; key optional |
 | `AzureOpenAI:DeploymentNameVision` | `gpt-4.1-mini` | vision deployment |
@@ -63,8 +63,8 @@ Credentials per client: endpoint + `ApiKey` configured → key credential; endpo
 
 `POST /v1/extract`, `multipart/form-data`:
 
-- N file parts, field name `files`, each with filename + content type.
-- Optional single part `hints`: JSON object keyed by filename: `{ "bom.xlsx": { "purpose": "bom" } }`.
+* N file parts, field name `files`, each with filename + content type.
+* Optional single part `hints`: JSON object keyed by filename: `{ "bom.xlsx": { "purpose": "bom" } }`.
 
 **Purpose-hint taxonomy v1** (closes Decision 12 open item 2): `bom`, `photo`. Hints are advisory metadata in v1: validated; unknown value → per-file warning `unknown purpose hint '<x>' ignored`; no routing change (routing is kind-based). Room to make hints behavioral later without a contract break.
 
@@ -92,8 +92,8 @@ Always `200` for a well-formed request; per-file success/failure inside the enve
 } ] }
 ```
 
-- Typed cells: JSON `number | string | boolean | null`; dates → ISO-8601 strings. Numeric cells carry the stored cell value (never re-parsed display text); formula cells use the cached computed value (missing → `null` + warning). This is the numeric-fidelity guarantee that justifies the engine.
-- Results return in request order. Duplicate filenames are allowed: each part yields its own `FileResult` in order, and a `hints` entry for that name applies to every match.
+* Typed cells: JSON `number | string | boolean | null`; dates → ISO-8601 strings. Numeric cells carry the stored cell value (never re-parsed display text); formula cells use the cached computed value (missing → `null` + warning). This is the numeric-fidelity guarantee that justifies the engine.
+* Results return in request order. Duplicate filenames are allowed: each part yields its own `FileResult` in order, and a `hints` entry for that name applies to every match.
 
 ### Errors
 
@@ -112,20 +112,20 @@ interface IExtractionEngine {
 
 `EngineRouter` selects by detected kind and owns: per-file timeout (`timeout` error) and catch-all (`engine_error`; exception message only, never content).
 
-- **LayoutEngine** — pdf (incl. scanned), docx, pptx, html → DI `prebuilt-layout`, Markdown output. DI warnings map into `warnings[]`; DI page count feeds the metric.
-- **SpreadsheetEngine** — xlsx via OpenXML SDK (no Azure). Per sheet: typed rows + Markdown rendering of the same grid. Shared strings resolved; numbers as `decimal`; booleans; dates → ISO-8601. Empty trailing rows/columns trimmed. No row truncation in v1 (the size cap is the guard).
-- **VisionEngine** — jpg/png → one chat completion, image as data-URI content part. System prompt pinned as a code constant, snapshot-tested (closes Decision 12 open item 3):
+* **LayoutEngine** — pdf (incl. scanned), docx, pptx, html → DI `prebuilt-layout`, Markdown output. DI warnings map into `warnings[]`; DI page count feeds the metric.
+* **SpreadsheetEngine** — xlsx via OpenXML SDK (no Azure). Per sheet: typed rows + Markdown rendering of the same grid. Shared strings resolved; numbers as `decimal`; booleans; dates → ISO-8601. Empty trailing rows/columns trimmed. No row truncation in v1 (the size cap is the guard).
+* **VisionEngine** — jpg/png → one chat completion, image as data-URI content part. System prompt pinned as a code constant, snapshot-tested (closes Decision 12 open item 3):
 
 > You describe product photographs for a document record. List only what is directly visible: objects, text, markings, labels, symbols, materials, colors, quantities. Transcribe visible text and codes exactly as printed. Do not identify product categories, do not infer purpose, compliance status, quality, or anything not visible in the image. Output a plain-text description.
 
 ## Cross-cutting
 
-- **Parallelism:** `Parallel.ForEachAsync` over files, capped at `DocInt:MaxParallelism`; results re-assembled in request order.
-- **Streaming limits:** multipart section caps enforced during read (a too-large part fails at the cap, not after buffering).
-- **Tracing:** one activity per request, one per file (tags: kind, size, outcome — no filenames in trace tags; filenames may appear in logs).
-- **Metric:** `docint.pages_processed` counter, tag `kind` — DI page count; xlsx = sheet count; image = 1.
-- **Log redaction rule:** log filename, size, kind, duration, outcome, error code — never document content, never extraction output. Enforced by a log-capture test (process golden files, assert known content strings absent from captured logs).
-- **Statelessness:** request-scoped byte handling only; nothing written to disk or any store.
+* **Parallelism:** `Parallel.ForEachAsync` over files, capped at `DocInt:MaxParallelism`; results re-assembled in request order.
+* **Streaming limits:** multipart section caps enforced during read (a too-large part fails at the cap, not after buffering).
+* **Tracing:** one activity per request, one per file (tags: kind, size, outcome — no filenames in trace tags; filenames may appear in logs).
+* **Metric:** `docint.pages_processed` counter, tag `kind` — DI page count; xlsx = sheet count; image = 1.
+* **Log redaction rule:** log filename, size, kind, duration, outcome, error code — never document content, never extraction output. Enforced by a log-capture test (process golden files, assert known content strings absent from captured logs).
+* **Statelessness:** request-scoped byte handling only; nothing written to disk or any store.
 
 ## Testing
 
@@ -134,6 +134,7 @@ interface IExtractionEngine {
 **Golden fixtures** (committed binaries in `tests/DocInt.Tests/golden/`, generated once by `tools/make-golden`): text PDF · scanned PDF (image-only page, the OCR proof) · DOCX · PPTX · HTML · BoM XLSX · product photo (synthetic sunglasses image with visible "UV400" text) · corrupt file.
 
 **Layers:**
+
 1. Unit: kind detection, validation caps, hints parsing.
 2. HTTP contract (fakes): response shape per kind, mixed good+corrupt batch, hint warnings, every 400 case, `engine_unconfigured` path.
 3. SpreadsheetEngine golden tests (real engine): cell-by-cell numeric fidelity against the BoM XLSX.
@@ -141,7 +142,12 @@ interface IExtractionEngine {
 
 ## CI & delivery
 
-GitHub Actions (`mchudinov/EuGo-docint`) on push/PR: restore → build `--no-restore` → test `--no-build` against `src/DocInt.slnx`, then `docker build` (no push — ACR/CD is EuGo-infra's job). Dockerfile: chiseled aspnet, port 8090.
+GitHub Actions (`mchudinov/EuGo-docint`), `.github/workflows/ci.yml`, on push/PR to `main` — two jobs:
+
+1. **build-test** — restore → build `--no-restore` → test `--no-build` against `src/DocInt.slnx` (live-smoke tests self-skip: no `DOCINT_LIVE_TESTS` in CI).
+2. **docker** — **multi-arch image build for `linux/amd64` + `linux/arm64`** (user directive 2026-07-19) via `docker/setup-qemu-action` + `docker/setup-buildx-action` + `docker/build-push-action` with `platforms: linux/amd64,linux/arm64`, `push: false`. Build-only validation; pushing to ACR is EuGo-infra's CD job.
+
+**Dockerfile** (chiseled aspnet, port 8090) uses the standard .NET cross-publish pattern so ARM builds don't crawl under QEMU emulation: the SDK stage is pinned to the build host (`FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0 AS build`) and cross-targets via `ARG TARGETARCH` + `dotnet publish -a $TARGETARCH`; only the runtime stage (`mcr.microsoft.com/dotnet/aspnet:10.0-noble-chiseled-extra`, itself multi-arch) resolves per target platform. Otherwise mirrors EuGo-mcp's Dockerfile (stage layout, `USER $APP_UID`, `UseAppHost=false`).
 
 ## Implementation workflow
 
