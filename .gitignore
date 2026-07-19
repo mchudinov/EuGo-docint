@@ -406,3 +406,6 @@ FodyWeavers.xsd
 # JetBrains Rider
 *.sln.iml
 /helm/chart/example-net-console-0.1.0.tgz
+
+# Claude Code local-settings temp files
+.claude/*.tmp.*

@@ -6,10 +6,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **EuGo-docint** (*EuGo Document Intelligence*) — an independent, **stateless, cluster-internal document-understanding service**: files in → Markdown, tables with typed numeric cells, image descriptions, per-file warnings/errors out. It renders no compliance judgment and stores nothing. It is called by EuGo-Web (and later EuGo-mcp) over `POST /v1/extract` on a shared AKS cluster, and is never exposed via ingress.
 
-**Current state: pre-T1 scaffold.** `src/`, `tests/`, `docs/` are empty and there are no commits yet. The build plan and spec live in the sibling Obsidian vault:
+The build plan and spec live in the sibling Obsidian vault; the approved service design lives in this repo:
 
+- Service design (authoritative for T1–T6): `docs/superpowers/specs/2026-07-19-eugo-docint-design.md`
 - Plan (task level, T1–T8): `../EuGo-Obsidian/plans/eugo-docint-plan.md`
-- Spec (Decision 12): `../EuGo-Obsidian/plans/Plan-A-Step-1/12-decision-eugo-docint.md`
+- Spec (Decision 12): `../EuGo-Obsidian/plans/Plan-A-Step-1/12-decision-eugo-docint.md` — **amended 2026-07-19**: the "no Aspire AppHost" dev-loop note is superseded; the solution uses .NET Aspire (AppHost + ServiceDefaults) per user directive.
 
 Sibling repos: `../EuGo-mcp` (conventions to mirror — its `CLAUDE.md` is the reference), `../EuGo-web` (the consumer), `../EuGo-infra`.
 
@@ -29,7 +30,7 @@ That exact three-step sequence, in that order, is the enforced gate before any m
 
 Run a single test: `dotnet test --no-build src/DocInt.slnx --filter "FullyQualifiedName~TestName"`.
 
-Local dev is plain `dotnet run --project src/DocInt.Api` — docint deliberately has **no Aspire AppHost** (its only dependencies are Azure services). Credentials via user-secrets/env locally, Workload Identity on AKS. Config keys: `DocumentIntelligence:Endpoint`, `AzureOpenAI:*`.
+Run the app two ways: `dotnet run --project src/AppHost` (Aspire dashboard + OTLP telemetry, preferred for dev) or `dotnet run --project src/DocInt.Api` directly on `http://localhost:8090` (8089 belongs to the siblings). Credentials via user-secrets/env locally (endpoint without key → `DefaultAzureCredential`), Workload Identity on AKS. Config keys: `DocumentIntelligence:*`, `AzureOpenAI:*`, `DocInt:*` — see the design doc's table.
 
 ## Architecture
 
@@ -37,16 +38,20 @@ Planned layout (locked by the plan — keep the decomposition):
 
 ```
 src/DocInt.slnx
-└─ DocInt.Api/          ASP.NET Core minimal API (net10.0)
-   ├─ Contracts/        request/response DTOs + OpenAPI
-   ├─ Engines/          EngineRouter · LayoutEngine · SpreadsheetEngine · VisionEngine
-   ├─ Validation/       size/type caps, kind detection
-   └─ Telemetry/        OTel + Serilog config, pages-processed metric
+├─ DocInt.Api/          ASP.NET Core minimal API (net10.0)
+│  ├─ Contracts/        request/response DTOs + OpenAPI
+│  ├─ Engines/          EngineRouter · LayoutEngine · SpreadsheetEngine · VisionEngine
+│  ├─ Validation/       size/type caps, kind detection
+│  └─ Telemetry/        Serilog config, pages-processed metric
+├─ AppHost/             Aspire orchestrator (Aspire.AppHost.Sdk/13.1.0), resource "docint"
+└─ ServiceDefaults/     stock Aspire defaults (OTel, health, resilience)
 tests/DocInt.Tests/     contract + golden-file tests (env-gated live smoke)
 └─ golden/              text PDF · scanned PDF · DOCX · PPTX · HTML · BoM XLSX · photo · corrupt file
-deploy/                 K8s manifests (Deployment, ClusterIP Service, NetworkPolicy, Workload Identity)
-Dockerfile              chiseled aspnet, mirrors EuGo-mcp's
+tools/make-golden/      one-off generator for the golden fixtures
+Dockerfile              chiseled aspnet, mirrors EuGo-mcp's (port 8090)
 ```
+
+K8s manifests (`deploy/`) are **not** in this repo — deployment is owned by EuGo-infra.
 
 **Contract v1** (frozen at T2; `/v1` is internal-may-change until EuGo-mcp becomes the second consumer):
 `POST /v1/extract` — multipart, N files + per-file hints (filename, content type, optional purpose hint e.g. `bom`, `photo`) → synchronous
@@ -55,7 +60,7 @@ Dockerfile              chiseled aspnet, mirrors EuGo-mcp's
 **Engines** — all implement the internal seam `IExtractionEngine`, kind-keyed behind `EngineRouter`:
 
 | Kind | Engine |
-|---|---|
+| --- | --- |
 | PDF (incl. scanned), DOCX, PPTX, HTML | DI `prebuilt-layout` → Markdown |
 | XLSX | OpenXML typed cells + Markdown rendering (`tables` carries the typed rows — numeric fidelity is the point) |
 | JPG/PNG | Vision description via Foundry utility model — **factual observations only**, no classification language |
