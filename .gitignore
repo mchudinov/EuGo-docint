@@ -409,3 +409,6 @@ FodyWeavers.xsd
 
 # Claude Code local-settings temp files
 .claude/*.tmp.*
+
+# superpowers SDD scratch (ledger, briefs, reports)
+.superpowers/
