@@ -1179,6 +1179,26 @@ public class MultipartReaderTests
         await Assert.ThrowsAsync<BadExtractRequestException>(async () =>
             await Reader().ReadAsync(await RequestOf(badHints), CancellationToken.None));
     }
+
+    [Fact]
+    public async Task Oversized_hints_part_throws_bad_request()
+    {
+        var padding = new string('a', 300_000);
+        using var form = Multipart.Form(("a.pdf", TestBytes.Pdf, "application/pdf"))
+            .WithHints("{\"a.pdf\":{\"purpose\":\"" + padding + "\"}}");
+        await Assert.ThrowsAsync<BadExtractRequestException>(async () =>
+            await Reader().ReadAsync(await RequestOf(form), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Declared_content_length_over_request_cap_throws_bad_request()
+    {
+        using var form = Multipart.Form(("a.pdf", TestBytes.Pdf, "application/pdf"));
+        var request = await RequestOf(form);
+        request.ContentLength = long.MaxValue;
+        await Assert.ThrowsAsync<BadExtractRequestException>(async () =>
+            await Reader().ReadAsync(request, CancellationToken.None));
+    }
 }
 ```
 
@@ -1228,6 +1248,7 @@ public static class HintsParser
 Create `src/DocInt.Api/Validation/MultipartExtractRequestReader.cs`:
 
 ```csharp
+using System.Text;
 using DocInt.Api.Configuration;
 using DocInt.Api.Contracts;
 using DocInt.Api.Engines;
@@ -1240,10 +1261,14 @@ namespace DocInt.Api.Validation;
 /// <summary>
 /// Streams the multipart body: buffers each 'files' part in memory up to MaxFileBytes
 /// (a too-large part is rejected at the cap, never fully buffered), collects the optional
-/// 'hints' part, detects kinds, and applies purpose hints. Nothing touches disk.
+/// 'hints' part (capped at MaxHintsBytes, same never-fully-buffered rule), detects kinds,
+/// and applies purpose hints. Nothing touches disk.
 /// </summary>
 public sealed class MultipartExtractRequestReader(IOptions<DocIntOptions> options)
 {
+    /// <summary>Far beyond any legitimate hints object for &lt;=32 files; guards against unbounded buffering.</summary>
+    private const int MaxHintsBytes = 262_144;
+
     private readonly DocIntOptions _options = options.Value;
 
     public async Task<IReadOnlyList<FileItem>> ReadAsync(HttpRequest request, CancellationToken ct)
@@ -1305,8 +1330,11 @@ public sealed class MultipartExtractRequestReader(IOptions<DocIntOptions> option
             }
             else if (disposition.IsFormDisposition() && partName == "hints")
             {
-                using var sr = new StreamReader(section.Body);
-                hintsJson = await sr.ReadToEndAsync(ct);
+                var (bytes, tooLarge) = await BufferAsync(section.Body, MaxHintsBytes, ct);
+                if (tooLarge)
+                    throw new BadExtractRequestException(
+                        $"hints part exceeds the limit of {MaxHintsBytes} bytes");
+                hintsJson = Encoding.UTF8.GetString(bytes);
             }
         }
 
@@ -3340,19 +3368,7 @@ public class RedactionTests
 }
 ```
 
-Append to `tests/DocInt.Tests/MultipartReaderTests.cs` (inside the class):
-
-```csharp
-    [Fact]
-    public async Task Declared_content_length_over_request_cap_throws_bad_request()
-    {
-        using var form = Multipart.Form(("a.pdf", TestBytes.Pdf, "application/pdf"));
-        var request = await RequestOf(form);
-        request.ContentLength = long.MaxValue;
-        await Assert.ThrowsAsync<BadExtractRequestException>(async () =>
-            await Reader().ReadAsync(request, CancellationToken.None));
-    }
-```
+The `Declared_content_length_over_request_cap_throws_bad_request` reader test originally scheduled here landed early, in Task 3b, alongside the `hints`-part size cap fix — not duplicated in this task.
 
 - [ ] **Step 3: Run to verify failure**
 

@@ -1,3 +1,4 @@
+using System.Text;
 using DocInt.Api.Configuration;
 using DocInt.Api.Contracts;
 using DocInt.Api.Engines;
@@ -10,10 +11,14 @@ namespace DocInt.Api.Validation;
 /// <summary>
 /// Streams the multipart body: buffers each 'files' part in memory up to MaxFileBytes
 /// (a too-large part is rejected at the cap, never fully buffered), collects the optional
-/// 'hints' part, detects kinds, and applies purpose hints. Nothing touches disk.
+/// 'hints' part (capped at MaxHintsBytes, same never-fully-buffered rule), detects kinds,
+/// and applies purpose hints. Nothing touches disk.
 /// </summary>
 public sealed class MultipartExtractRequestReader(IOptions<DocIntOptions> options)
 {
+    /// <summary>Far beyond any legitimate hints object for &lt;=32 files; guards against unbounded buffering.</summary>
+    private const int MaxHintsBytes = 262_144;
+
     private readonly DocIntOptions _options = options.Value;
 
     public async Task<IReadOnlyList<FileItem>> ReadAsync(HttpRequest request, CancellationToken ct)
@@ -75,8 +80,11 @@ public sealed class MultipartExtractRequestReader(IOptions<DocIntOptions> option
             }
             else if (disposition.IsFormDisposition() && partName == "hints")
             {
-                using var sr = new StreamReader(section.Body);
-                hintsJson = await sr.ReadToEndAsync(ct);
+                var (bytes, tooLarge) = await BufferAsync(section.Body, MaxHintsBytes, ct);
+                if (tooLarge)
+                    throw new BadExtractRequestException(
+                        $"hints part exceeds the limit of {MaxHintsBytes} bytes");
+                hintsJson = Encoding.UTF8.GetString(bytes);
             }
         }
 

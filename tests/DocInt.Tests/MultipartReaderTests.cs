@@ -102,4 +102,24 @@ public class MultipartReaderTests
         await Assert.ThrowsAsync<BadExtractRequestException>(async () =>
             await Reader().ReadAsync(await RequestOf(badHints), CancellationToken.None));
     }
+
+    [Fact]
+    public async Task Oversized_hints_part_throws_bad_request()
+    {
+        var padding = new string('a', 300_000);
+        using var form = Multipart.Form(("a.pdf", TestBytes.Pdf, "application/pdf"))
+            .WithHints("{\"a.pdf\":{\"purpose\":\"" + padding + "\"}}");
+        await Assert.ThrowsAsync<BadExtractRequestException>(async () =>
+            await Reader().ReadAsync(await RequestOf(form), CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Declared_content_length_over_request_cap_throws_bad_request()
+    {
+        using var form = Multipart.Form(("a.pdf", TestBytes.Pdf, "application/pdf"));
+        var request = await RequestOf(form);
+        request.ContentLength = long.MaxValue;
+        await Assert.ThrowsAsync<BadExtractRequestException>(async () =>
+            await Reader().ReadAsync(request, CancellationToken.None));
+    }
 }
