@@ -99,7 +99,7 @@ Always `200` for a well-formed request; per-file success/failure inside the enve
 
 Per-file codes: `unsupported_type` · `too_large` · `empty_file` · `corrupt` · `timeout` · `engine_error` · `engine_unconfigured`.
 
-Request-level `400` (ProblemDetails) only for: not multipart · zero files · more than `MaxFilesPerRequest` · malformed `hints` JSON. One corrupt file never fails the batch; there is no path to a 500 for bad input.
+Request-level `400` (ProblemDetails) only for: not multipart · zero files · more than `MaxFilesPerRequest` · malformed `hints` JSON · `hints` part over its read cap · declared request body over `MaxRequestBytes`. The last two are the request-scoped half of the streaming-caps rule below: `hints` is not file-scoped, so it has no per-file slot to carry an error. One corrupt file never fails the batch; there is no path to a 500 for bad input.
 
 ## Engines
 
