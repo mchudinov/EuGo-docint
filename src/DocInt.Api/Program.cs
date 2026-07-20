@@ -1,4 +1,7 @@
+using DocInt.Api.Api;
 using DocInt.Api.Configuration;
+using DocInt.Api.Engines;
+using DocInt.Api.Validation;
 using Serilog;
 using Serilog.Debugging;
 
@@ -15,6 +18,10 @@ try
 
     builder.AddServiceDefaults();
     builder.AddDocIntOptions();
+
+    builder.Services.AddSingleton<MultipartExtractRequestReader>();
+    builder.Services.AddSingleton<EngineRouter>();
+    builder.Services.AddSingleton<ExtractionService>();
 
     // Serilog replaces the default logging providers; ServiceDefaults' OTel traces/metrics
     // stay active. Under Aspire (OTEL_EXPORTER_OTLP_ENDPOINT set) also ship logs via OTLP.
@@ -40,6 +47,8 @@ try
     }
 
     app.MapHealthChecks("/healthz");
+
+    app.MapExtract();
 
     var version = typeof(Program).Assembly
         .GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
