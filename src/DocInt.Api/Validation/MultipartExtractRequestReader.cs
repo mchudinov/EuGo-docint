@@ -1,0 +1,119 @@
+using DocInt.Api.Configuration;
+using DocInt.Api.Contracts;
+using DocInt.Api.Engines;
+using Microsoft.AspNetCore.WebUtilities;
+using Microsoft.Extensions.Options;
+using Microsoft.Net.Http.Headers;
+
+namespace DocInt.Api.Validation;
+
+/// <summary>
+/// Streams the multipart body: buffers each 'files' part in memory up to MaxFileBytes
+/// (a too-large part is rejected at the cap, never fully buffered), collects the optional
+/// 'hints' part, detects kinds, and applies purpose hints. Nothing touches disk.
+/// </summary>
+public sealed class MultipartExtractRequestReader(IOptions<DocIntOptions> options)
+{
+    private readonly DocIntOptions _options = options.Value;
+
+    public async Task<IReadOnlyList<FileItem>> ReadAsync(HttpRequest request, CancellationToken ct)
+    {
+        if (request.ContentLength is { } declared && declared > _options.MaxRequestBytes)
+            throw new BadExtractRequestException(
+                $"request body of {declared} bytes exceeds the limit of {_options.MaxRequestBytes} bytes");
+
+        if (!MediaTypeHeaderValue.TryParse(request.ContentType, out var mediaType)
+            || !"multipart/form-data".Equals(mediaType.MediaType.Value, StringComparison.OrdinalIgnoreCase))
+            throw new BadExtractRequestException("request must be multipart/form-data");
+        var boundary = HeaderUtilities.RemoveQuotes(mediaType.Boundary).Value;
+        if (string.IsNullOrWhiteSpace(boundary))
+            throw new BadExtractRequestException("multipart boundary missing");
+
+        var files = new List<FileItem>();
+        string? hintsJson = null;
+        var reader = new MultipartReader(boundary, request.Body);
+        while (await reader.ReadNextSectionAsync(ct) is { } section)
+        {
+            if (!ContentDispositionHeaderValue.TryParse(section.ContentDisposition, out var disposition))
+                continue;
+            var partName = HeaderUtilities.RemoveQuotes(disposition.Name).Value;
+
+            if (disposition.IsFileDisposition() && partName == "files")
+            {
+                if (files.Count >= _options.MaxFilesPerRequest)
+                    throw new BadExtractRequestException(
+                        $"more than {_options.MaxFilesPerRequest} files in one request");
+                var fileName = HeaderUtilities.RemoveQuotes(disposition.FileName).Value;
+                if (string.IsNullOrEmpty(fileName)) fileName = $"file-{files.Count}";
+                var (bytes, tooLarge) = await BufferAsync(section.Body, _options.MaxFileBytes, ct);
+                var item = new FileItem
+                {
+                    Index = files.Count,
+                    Name = fileName,
+                    ClaimedContentType = section.ContentType,
+                    Bytes = bytes
+                };
+                if (tooLarge)
+                    item.Error = new FileError(ErrorCodes.TooLarge,
+                        $"file exceeds the per-file limit of {_options.MaxFileBytes} bytes");
+                else if (bytes.Length == 0)
+                    item.Error = new FileError(ErrorCodes.EmptyFile, "file is empty");
+                else
+                {
+                    var detection = FileKindDetector.Detect(fileName, section.ContentType, bytes);
+                    if (detection.Warning is not null) item.Warnings.Add(detection.Warning);
+                    if (detection.Kind is null)
+                        item.Error = new FileError(ErrorCodes.UnsupportedType,
+                            $"could not detect a supported file type for '{fileName}'");
+                    else
+                    {
+                        item.Kind = detection.Kind;
+                        item.ImageMediaType = detection.ImageMediaType;
+                    }
+                }
+                files.Add(item);
+            }
+            else if (disposition.IsFormDisposition() && partName == "hints")
+            {
+                using var sr = new StreamReader(section.Body);
+                hintsJson = await sr.ReadToEndAsync(ct);
+            }
+        }
+
+        if (files.Count == 0)
+            throw new BadExtractRequestException("request contains no file parts named 'files'");
+        if (hintsJson is not null)
+            ApplyHints(files, HintsParser.Parse(hintsJson));
+        return files;
+    }
+
+    private static void ApplyHints(List<FileItem> files, Dictionary<string, string> hints)
+    {
+        foreach (var file in files)
+        {
+            if (!hints.TryGetValue(file.Name, out var purpose)) continue;
+            if (PurposeHints.Known.Contains(purpose))
+                file.Purpose = purpose.ToLowerInvariant();
+            else
+                file.Warnings.Add($"unknown purpose hint '{purpose}' ignored");
+        }
+    }
+
+    private static async Task<(byte[] Bytes, bool TooLarge)> BufferAsync(Stream body, long maxBytes, CancellationToken ct)
+    {
+        using var buffered = new MemoryStream();
+        var buffer = new byte[81920];
+        while (true)
+        {
+            var read = await body.ReadAsync(buffer, ct);
+            if (read == 0) break;
+            if (buffered.Length + read > maxBytes)
+            {
+                while (await body.ReadAsync(buffer, ct) != 0) { }
+                return ([], true);
+            }
+            buffered.Write(buffer, 0, read);
+        }
+        return (buffered.ToArray(), false);
+    }
+}
