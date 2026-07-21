@@ -1,0 +1,5 @@
+# Golden test fixtures are generated binaries — never apply text/EOL normalization.
+# Some (text.pdf, unknown.bin) contain LF bytes but no NUL, so git's heuristic would
+# otherwise treat them as text and core.autocrlf=true could rewrite them on checkout,
+# desyncing text.pdf's hand-computed xref offsets. Regenerate via tools/make-golden.
+tests/DocInt.Tests/golden/** binary
