@@ -1460,6 +1460,8 @@ Create `tests/DocInt.Tests/ExtractContractTests.cs`:
 
 ```csharp
 using System.Net;
+using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
 using DocInt.Api.Contracts;
 using Microsoft.AspNetCore.Hosting;
@@ -1521,6 +1523,29 @@ public class ExtractContractTests : IClassFixture<ContractTestFactory>
 
         using var badHints = Multipart.Form(("a.pdf", TestBytes.Pdf, "application/pdf")).WithHints("nope");
         Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsync("/v1/extract", badHints)).StatusCode);
+    }
+
+    [Fact]
+    public async Task Malformed_multipart_framing_returns_400_not_500()
+    {
+        var client = _factory.CreateClient();
+        const string boundary = "----x";
+
+        // multipart/form-data content type but a body that starts a section and then
+        // just stops — no closing boundary, no final CRLF. This is corrupt framing,
+        // not a well-formed-but-empty request: the MultipartReader must fail while
+        // hunting for the boundary instead of cleanly reporting zero sections.
+        var body = "--" + boundary + "\r\n"
+            + "Content-Disposition: form-data; name=\"files\"; filename=\"a.pdf\"\r\n"
+            + "Content-Type: application/pdf\r\n"
+            + "\r\n"
+            + "truncated file content with no terminating boundary, stream just ends here";
+        var content = new ByteArrayContent(Encoding.UTF8.GetBytes(body));
+        content.Headers.ContentType = MediaTypeHeaderValue.Parse($"multipart/form-data; boundary={boundary}");
+
+        var response = await client.PostAsync("/v1/extract", content);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
     [Fact]
@@ -1586,6 +1611,36 @@ public class ExtractContractTests : IClassFixture<ContractTestFactory>
 }
 ```
 
+> **Added by `step-04b-close-500-paths`:** `Malformed_multipart_framing_returns_400_not_500` (shown
+> above, with the corresponding `using System.Net.Http.Headers;` / `using System.Text;` added to
+> this file's usings) is a new regression test proving a truncated/corrupt multipart body — well-formed
+> `Content-Type: multipart/form-data` but framing that ends before the closing boundary — returns 400,
+> not 500. It reproduced a real gap: ASP.NET Core's `MultipartReader` throws `System.IO.IOException:
+> Unexpected end of Stream, the content may have already been read by another component.` from
+> `MultipartReaderStream.ReadAsync` when the boundary search hits EOF, and that exception escaped
+> `MultipartExtractRequestReader.ReadAsync` uncaught (only `BadExtractRequestException` was ever
+> caught, by `ExtractEndpoint.Handle`). The fix — in `src/DocInt.Api/Validation/MultipartExtractRequestReader.cs`,
+> a file created by **Task 3**, so its own code block above is left as originally written — wraps the
+> section-reading `while` loop in `ReadAsync` with:
+> ```csharp
+> try
+> {
+>     while (await reader.ReadNextSectionAsync(ct) is { } section)
+>     {
+>         /* ... unchanged loop body ... */
+>     }
+> }
+> catch (Exception ex) when (ex is IOException or InvalidDataException)
+> {
+>     // Multipart in content-type but truncated/corrupt in framing: MultipartReader's
+>     // boundary search hit an unexpected end of stream. Bad input, not a server bug.
+>     throw new BadExtractRequestException("malformed multipart body");
+> }
+> ```
+> `OperationCanceledException` is deliberately not caught here. See
+> `.superpowers/sdd/task-4-report.md`'s appended `## Fix: close 500-on-bad-input paths` section for
+> the full RED/GREEN evidence.
+
 Create `tests/DocInt.Tests/ExtractionServiceTests.cs`:
 
 ```csharp
@@ -1644,6 +1699,8 @@ public class ExtractionServiceTests
         Assert.Equal(8, response.Files.Count);
         Assert.All(Enumerable.Range(0, 8), i => Assert.Equal($"md-{i}", response.Files[i].Markdown));
         Assert.True(engine.MaxObserved <= 2, $"observed {engine.MaxObserved} concurrent extractions");
+        Assert.True(engine.MaxObserved > 1, $"observed {engine.MaxObserved} concurrent extractions — " +
+            "expected real parallelism (>1 in flight), not a regression to fully-sequential processing");
     }
 
     [Fact]
@@ -1670,8 +1727,42 @@ public class ExtractionServiceTests
             throw new UnreachableException();
         }
     }
+
+    [Fact]
+    public async Task Stray_operation_canceled_exception_becomes_per_file_engine_error()
+    {
+        var options = Microsoft.Extensions.Options.Options.Create(new DocIntOptions());
+        var engine = new StrayCancellationEngine();
+        var service = new ExtractionService(
+            new EngineRouter([engine], options), options, NullLogger<ExtractionService>.Instance);
+
+        var files = new[] { new FileItem { Index = 0, Name = "weird.pdf", Kind = FileKind.Pdf, Bytes = TestBytes.Pdf } };
+
+        // Must not throw out of ExtractAsync (that would 500 the whole batch) — the
+        // engine's own OperationCanceledException is unrelated to our per-file timeout
+        // token or the request token, so it must be reported as a per-file error.
+        var response = await service.ExtractAsync(files, CancellationToken.None);
+
+        Assert.Equal(ErrorCodes.EngineError, response.Files[0].Error!.Code);
+    }
+
+    /// <summary>Simulates an engine whose own mechanism (e.g. an SDK client's default
+    /// HttpClient.Timeout) throws OperationCanceledException with neither our per-file
+    /// timeout token nor the request token cancelled.</summary>
+    private sealed class StrayCancellationEngine : IExtractionEngine
+    {
+        public IReadOnlyCollection<FileKind> Kinds { get; } = [FileKind.Pdf];
+        public Task<EngineOutcome> ExtractAsync(FileItem file, CancellationToken ct) =>
+            throw new OperationCanceledException();
+    }
 }
 ```
+
+> **Updated by `step-04b-close-500-paths`:** the lower-bound assertion on `MaxObserved` and the
+> `Stray_operation_canceled_exception_becomes_per_file_engine_error` test (with its
+> `StrayCancellationEngine` fake) were added in that follow-up; neither existed in the original
+> Task 4 brief. See `.superpowers/sdd/task-4-report.md`'s appended
+> `## Fix: close 500-on-bad-input paths` section.
 
 Add `using System.Diagnostics;` to the top of `ExtractionServiceTests.cs` for `UnreachableException`.
 
@@ -1759,18 +1850,37 @@ public sealed class EngineRouter
             return Errors.For(file, ErrorCodes.Timeout,
                 $"extraction exceeded the per-file timeout of {_timeout.TotalSeconds:0}s");
         }
+        catch (OperationCanceledException) when (requestCt.IsCancellationRequested)
+        {
+            // The request itself was cancelled — genuine client/host abandonment. There is
+            // no client left to answer, so propagate instead of manufacturing a per-file error.
+            throw;
+        }
         catch (EngineUnconfiguredException ex)
         {
             return Errors.For(file, ErrorCodes.EngineUnconfigured, ex.Message);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex)
         {
+            // Any other exception, including a stray OperationCanceledException from an
+            // engine's own mechanism (e.g. an SDK client's default HttpClient.Timeout) that
+            // is tied to neither our per-file timeout nor the request token, lands here.
             // Exception message only — never document content.
             return Errors.For(file, ErrorCodes.EngineError, ex.Message);
         }
     }
 }
 ```
+
+> **Updated by `step-04b-close-500-paths` (post-Task-4 hardening):** the catch chain above is
+> shown as it shipped after that follow-up fix — a second `OperationCanceledException` catch
+> (filtered on `requestCt.IsCancellationRequested`) rethrows genuine request abandonment, and
+> the final catch is now filterless so a stray `OperationCanceledException` from an engine's
+> own cancellation mechanism (unrelated to `cts`/`requestCt`) becomes `engine_error` instead of
+> escaping `RouteAsync` and 500ing the batch. The original Task 4 chain (as first implemented)
+> had `catch (Exception ex) when (ex is not OperationCanceledException)` as the sole catch-all
+> and no request-cancellation catch; see `.superpowers/sdd/task-4-report.md`'s appended
+> `## Fix: close 500-on-bad-input paths` section for the full before/after and test evidence.
 
 Create `src/DocInt.Api/Engines/ExtractionService.cs`:
 

@@ -37,55 +37,64 @@ public sealed class MultipartExtractRequestReader(IOptions<DocIntOptions> option
         var files = new List<FileItem>();
         string? hintsJson = null;
         var reader = new MultipartReader(boundary, request.Body);
-        while (await reader.ReadNextSectionAsync(ct) is { } section)
+        try
         {
-            if (!ContentDispositionHeaderValue.TryParse(section.ContentDisposition, out var disposition))
-                continue;
-            var partName = HeaderUtilities.RemoveQuotes(disposition.Name).Value;
-
-            if (disposition.IsFileDisposition() && partName == "files")
+            while (await reader.ReadNextSectionAsync(ct) is { } section)
             {
-                if (files.Count >= _options.MaxFilesPerRequest)
-                    throw new BadExtractRequestException(
-                        $"more than {_options.MaxFilesPerRequest} files in one request");
-                var fileName = HeaderUtilities.RemoveQuotes(disposition.FileName).Value;
-                if (string.IsNullOrEmpty(fileName)) fileName = $"file-{files.Count}";
-                var (bytes, tooLarge) = await BufferAsync(section.Body, _options.MaxFileBytes, ct);
-                var item = new FileItem
+                if (!ContentDispositionHeaderValue.TryParse(section.ContentDisposition, out var disposition))
+                    continue;
+                var partName = HeaderUtilities.RemoveQuotes(disposition.Name).Value;
+
+                if (disposition.IsFileDisposition() && partName == "files")
                 {
-                    Index = files.Count,
-                    Name = fileName,
-                    ClaimedContentType = section.ContentType,
-                    Bytes = bytes
-                };
-                if (tooLarge)
-                    item.Error = new FileError(ErrorCodes.TooLarge,
-                        $"file exceeds the per-file limit of {_options.MaxFileBytes} bytes");
-                else if (bytes.Length == 0)
-                    item.Error = new FileError(ErrorCodes.EmptyFile, "file is empty");
-                else
-                {
-                    var detection = FileKindDetector.Detect(fileName, section.ContentType, bytes);
-                    if (detection.Warning is not null) item.Warnings.Add(detection.Warning);
-                    if (detection.Kind is null)
-                        item.Error = new FileError(ErrorCodes.UnsupportedType,
-                            $"could not detect a supported file type for '{fileName}'");
+                    if (files.Count >= _options.MaxFilesPerRequest)
+                        throw new BadExtractRequestException(
+                            $"more than {_options.MaxFilesPerRequest} files in one request");
+                    var fileName = HeaderUtilities.RemoveQuotes(disposition.FileName).Value;
+                    if (string.IsNullOrEmpty(fileName)) fileName = $"file-{files.Count}";
+                    var (bytes, tooLarge) = await BufferAsync(section.Body, _options.MaxFileBytes, ct);
+                    var item = new FileItem
+                    {
+                        Index = files.Count,
+                        Name = fileName,
+                        ClaimedContentType = section.ContentType,
+                        Bytes = bytes
+                    };
+                    if (tooLarge)
+                        item.Error = new FileError(ErrorCodes.TooLarge,
+                            $"file exceeds the per-file limit of {_options.MaxFileBytes} bytes");
+                    else if (bytes.Length == 0)
+                        item.Error = new FileError(ErrorCodes.EmptyFile, "file is empty");
                     else
                     {
-                        item.Kind = detection.Kind;
-                        item.ImageMediaType = detection.ImageMediaType;
+                        var detection = FileKindDetector.Detect(fileName, section.ContentType, bytes);
+                        if (detection.Warning is not null) item.Warnings.Add(detection.Warning);
+                        if (detection.Kind is null)
+                            item.Error = new FileError(ErrorCodes.UnsupportedType,
+                                $"could not detect a supported file type for '{fileName}'");
+                        else
+                        {
+                            item.Kind = detection.Kind;
+                            item.ImageMediaType = detection.ImageMediaType;
+                        }
                     }
+                    files.Add(item);
                 }
-                files.Add(item);
+                else if (disposition.IsFormDisposition() && partName == "hints")
+                {
+                    var (bytes, tooLarge) = await BufferAsync(section.Body, MaxHintsBytes, ct);
+                    if (tooLarge)
+                        throw new BadExtractRequestException(
+                            $"hints part exceeds the limit of {MaxHintsBytes} bytes");
+                    hintsJson = Encoding.UTF8.GetString(bytes);
+                }
             }
-            else if (disposition.IsFormDisposition() && partName == "hints")
-            {
-                var (bytes, tooLarge) = await BufferAsync(section.Body, MaxHintsBytes, ct);
-                if (tooLarge)
-                    throw new BadExtractRequestException(
-                        $"hints part exceeds the limit of {MaxHintsBytes} bytes");
-                hintsJson = Encoding.UTF8.GetString(bytes);
-            }
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException)
+        {
+            // Multipart in content-type but truncated/corrupt in framing: MultipartReader's
+            // boundary search hit an unexpected end of stream. Bad input, not a server bug.
+            throw new BadExtractRequestException("malformed multipart body");
         }
 
         if (files.Count == 0)

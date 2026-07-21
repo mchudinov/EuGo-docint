@@ -35,12 +35,21 @@ public sealed class EngineRouter
             return Errors.For(file, ErrorCodes.Timeout,
                 $"extraction exceeded the per-file timeout of {_timeout.TotalSeconds:0}s");
         }
+        catch (OperationCanceledException) when (requestCt.IsCancellationRequested)
+        {
+            // The request itself was cancelled — genuine client/host abandonment. There is
+            // no client left to answer, so propagate instead of manufacturing a per-file error.
+            throw;
+        }
         catch (EngineUnconfiguredException ex)
         {
             return Errors.For(file, ErrorCodes.EngineUnconfigured, ex.Message);
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex)
         {
+            // Any other exception, including a stray OperationCanceledException from an
+            // engine's own mechanism (e.g. an SDK client's default HttpClient.Timeout) that
+            // is tied to neither our per-file timeout nor the request token, lands here.
             // Exception message only — never document content.
             return Errors.For(file, ErrorCodes.EngineError, ex.Message);
         }

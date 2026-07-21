@@ -54,6 +54,8 @@ public class ExtractionServiceTests
         Assert.Equal(8, response.Files.Count);
         Assert.All(Enumerable.Range(0, 8), i => Assert.Equal($"md-{i}", response.Files[i].Markdown));
         Assert.True(engine.MaxObserved <= 2, $"observed {engine.MaxObserved} concurrent extractions");
+        Assert.True(engine.MaxObserved > 1, $"observed {engine.MaxObserved} concurrent extractions — " +
+            "expected real parallelism (>1 in flight), not a regression to fully-sequential processing");
     }
 
     [Fact]
@@ -79,5 +81,33 @@ public class ExtractionServiceTests
             await Task.Delay(TimeSpan.FromMinutes(5), ct);
             throw new UnreachableException();
         }
+    }
+
+    [Fact]
+    public async Task Stray_operation_canceled_exception_becomes_per_file_engine_error()
+    {
+        var options = Microsoft.Extensions.Options.Options.Create(new DocIntOptions());
+        var engine = new StrayCancellationEngine();
+        var service = new ExtractionService(
+            new EngineRouter([engine], options), options, NullLogger<ExtractionService>.Instance);
+
+        var files = new[] { new FileItem { Index = 0, Name = "weird.pdf", Kind = FileKind.Pdf, Bytes = TestBytes.Pdf } };
+
+        // Must not throw out of ExtractAsync (that would 500 the whole batch) — the
+        // engine's own OperationCanceledException is unrelated to our per-file timeout
+        // token or the request token, so it must be reported as a per-file error.
+        var response = await service.ExtractAsync(files, CancellationToken.None);
+
+        Assert.Equal(ErrorCodes.EngineError, response.Files[0].Error!.Code);
+    }
+
+    /// <summary>Simulates an engine whose own mechanism (e.g. an SDK client's default
+    /// HttpClient.Timeout) throws OperationCanceledException with neither our per-file
+    /// timeout token nor the request token cancelled.</summary>
+    private sealed class StrayCancellationEngine : IExtractionEngine
+    {
+        public IReadOnlyCollection<FileKind> Kinds { get; } = [FileKind.Pdf];
+        public Task<EngineOutcome> ExtractAsync(FileItem file, CancellationToken ct) =>
+            throw new OperationCanceledException();
     }
 }

@@ -1,4 +1,6 @@
 using System.Net;
+using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
 using DocInt.Api.Contracts;
 using Microsoft.AspNetCore.Hosting;
@@ -61,6 +63,29 @@ public class ExtractContractTests : IClassFixture<ContractTestFactory>
 
         using var badHints = Multipart.Form(("a.pdf", TestBytes.Pdf, "application/pdf")).WithHints("nope");
         Assert.Equal(HttpStatusCode.BadRequest, (await client.PostAsync("/v1/extract", badHints)).StatusCode);
+    }
+
+    [Fact]
+    public async Task Malformed_multipart_framing_returns_400_not_500()
+    {
+        var client = _factory.CreateClient();
+        const string boundary = "----x";
+
+        // multipart/form-data content type but a body that starts a section and then
+        // just stops — no closing boundary, no final CRLF. This is corrupt framing,
+        // not a well-formed-but-empty request: the MultipartReader must fail while
+        // hunting for the boundary instead of cleanly reporting zero sections.
+        var body = "--" + boundary + "\r\n"
+            + "Content-Disposition: form-data; name=\"files\"; filename=\"a.pdf\"\r\n"
+            + "Content-Type: application/pdf\r\n"
+            + "\r\n"
+            + "truncated file content with no terminating boundary, stream just ends here";
+        var content = new ByteArrayContent(Encoding.UTF8.GetBytes(body));
+        content.Headers.ContentType = MediaTypeHeaderValue.Parse($"multipart/form-data; boundary={boundary}");
+
+        var response = await client.PostAsync("/v1/extract", content);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
     [Fact]
