@@ -33,3 +33,9 @@ public static class Multipart
         return form;
     }
 }
+
+public static class Golden
+{
+    public static byte[] Bytes(string name) =>
+        File.ReadAllBytes(Path.Combine(AppContext.BaseDirectory, "golden", name));
+}
