@@ -28,9 +28,6 @@ public class ContractTestFactory : DocIntAppFactory
             [FileKind.Pdf, FileKind.Docx, FileKind.Pptx, FileKind.Html],
             f => FakeEngine.Markdown(f, "LAYOUT_MD_SENTINEL", 3)));
         services.AddSingleton<IExtractionEngine>(new FakeEngine(
-            [FileKind.Xlsx],
-            f => FakeEngine.Markdown(f, "XLSX_MD_SENTINEL", 1)));
-        services.AddSingleton<IExtractionEngine>(new FakeEngine(
             [FileKind.Image],
             f => FakeEngine.Image(f, "VISION_DESCRIPTION_SENTINEL")));
     }
