@@ -83,3 +83,18 @@ K8s manifests (`deploy/`) are **not** in this repo — deployment is owned by Eu
 - Testing is golden-file driven: contract tests assert response shapes with Azure stubbed; the env-gated live smoke suite proves OCR (scanned PDF), numeric fidelity (BoM XLSX), and lens/UV cues on the photo.
 - `net10.0`, `Nullable` and `ImplicitUsings` enabled across projects.
 - **Use the Context7 MCP server for documentation lookups** (Azure.AI.DocumentIntelligence, OpenXML, Azure OpenAI, ASP.NET Core) rather than memory — version-accurate docs matter here.
+
+## Live smoke tests
+
+Azure-stubbed tests are the default; the live suite (`LiveSmokeTests`) self-skips unless gated on:
+
+```bash
+export DOCINT_LIVE_TESTS=1
+export DocumentIntelligence__Endpoint=https://<di-resource>.cognitiveservices.azure.com/
+export DocumentIntelligence__ApiKey=<key>        # omit to use DefaultAzureCredential (az login)
+export AzureOpenAI__Endpoint=https://<aoai-resource>.openai.azure.com/
+export AzureOpenAI__ApiKey=<key>                 # omit to use DefaultAzureCredential
+dotnet test --no-build src/DocInt.slnx --filter "FullyQualifiedName~LiveSmokeTests"
+```
+
+Golden fixtures are committed binaries; regenerate only deliberately with `dotnet run --project tools/make-golden`.
