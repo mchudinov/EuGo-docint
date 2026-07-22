@@ -80,7 +80,7 @@ K8s manifests (`deploy/`) are **not** in this repo — deployment is owned by Eu
 - **Workflow per task:** cut a per-step branch → TDD (failing test first) → `restore` → `build --no-restore` → `test --no-build` → merge to `main` once green → delete the branch. Never develop directly on `main`; never merge red.
 - The `.claude/agents/dotnet-developer.md` agent encodes the full PR-based variant (four-section PR bodies, `agent/<slug>` branches); use it for dispatched tasks. When the plan's lighter merge-to-main flow and the agent's never-merge rule conflict, the plan's flow wins for routine steps unless the user asks for PRs.
 - Don't skip or weaken tests over missing infrastructure (no Azure credentials, no Docker) — run the subset that can execute and list what was blocked. Live-smoke tests are env-gated by design.
-- Testing is golden-file driven: contract tests assert response shapes with Azure stubbed; the env-gated live smoke suite proves OCR (scanned PDF), numeric fidelity (BoM XLSX), and lens/UV cues on the photo.
+- Testing is golden-file driven: contract tests assert response shapes with Azure stubbed; the SpreadsheetEngine golden test proves BoM XLSX numeric fidelity offline (OpenXML, no Azure); the env-gated live smoke suite proves OCR (scanned PDF) and lens/UV cues on the photo against real Azure.
 - `net10.0`, `Nullable` and `ImplicitUsings` enabled across projects.
 - **Use the Context7 MCP server for documentation lookups** (Azure.AI.DocumentIntelligence, OpenXML, Azure OpenAI, ASP.NET Core) rather than memory — version-accurate docs matter here.
 
