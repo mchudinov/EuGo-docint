@@ -1,7 +1,10 @@
 using DocInt.Api.Api;
 using DocInt.Api.Configuration;
 using DocInt.Api.Engines;
+using DocInt.Api.Telemetry;
 using DocInt.Api.Validation;
+using OpenTelemetry.Metrics;
+using OpenTelemetry.Trace;
 using Serilog;
 using Serilog.Debugging;
 
@@ -18,6 +21,16 @@ try
 
     builder.AddServiceDefaults();
     builder.AddDocIntOptions();
+
+    builder.Services.AddSingleton<DocIntTelemetry>();
+    builder.Services.ConfigureOpenTelemetryTracerProvider(t => t.AddSource(DocIntTelemetry.SourceName));
+    builder.Services.ConfigureOpenTelemetryMeterProvider(m => m.AddMeter(DocIntTelemetry.MeterName));
+    builder.WebHost.ConfigureKestrel((context, kestrel) =>
+    {
+        var docint = new DocIntOptions();
+        context.Configuration.GetSection(DocIntOptions.SectionName).Bind(docint);
+        kestrel.Limits.MaxRequestBodySize = docint.MaxRequestBytes;
+    });
 
     builder.Services.AddSingleton<MultipartExtractRequestReader>();
     builder.Services.AddSingleton<EngineRouter>();

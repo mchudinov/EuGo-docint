@@ -2,6 +2,7 @@ using System.Diagnostics;
 using DocInt.Api.Configuration;
 using DocInt.Api.Contracts;
 using DocInt.Api.Engines;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
@@ -9,6 +10,13 @@ namespace DocInt.Tests;
 
 public class ExtractionServiceTests
 {
+    private static DocInt.Api.Telemetry.DocIntTelemetry TestTelemetry()
+    {
+        var provider = new ServiceCollection().AddMetrics().BuildServiceProvider();
+        return new DocInt.Api.Telemetry.DocIntTelemetry(
+            provider.GetRequiredService<System.Diagnostics.Metrics.IMeterFactory>());
+    }
+
     private sealed class CountingEngine : IExtractionEngine
     {
         private int _inFlight;
@@ -42,7 +50,7 @@ public class ExtractionServiceTests
             new DocIntOptions { MaxParallelism = 2 });
         var engine = new CountingEngine();
         var service = new ExtractionService(
-            new EngineRouter([engine], options), options, NullLogger<ExtractionService>.Instance);
+            new EngineRouter([engine], options), options, TestTelemetry(), NullLogger<ExtractionService>.Instance);
 
         var files = Enumerable.Range(0, 8).Select(i => new FileItem
         {
@@ -65,7 +73,7 @@ public class ExtractionServiceTests
             new DocIntOptions { PerFileTimeoutSeconds = 1 });
         var hanging = new FakeHangingEngine();
         var service = new ExtractionService(
-            new EngineRouter([hanging], options), options, NullLogger<ExtractionService>.Instance);
+            new EngineRouter([hanging], options), options, TestTelemetry(), NullLogger<ExtractionService>.Instance);
 
         var files = new[] { new FileItem { Index = 0, Name = "slow.pdf", Kind = FileKind.Pdf, Bytes = TestBytes.Pdf } };
         var response = await service.ExtractAsync(files, CancellationToken.None);
@@ -89,7 +97,7 @@ public class ExtractionServiceTests
         var options = Microsoft.Extensions.Options.Options.Create(new DocIntOptions());
         var engine = new StrayCancellationEngine();
         var service = new ExtractionService(
-            new EngineRouter([engine], options), options, NullLogger<ExtractionService>.Instance);
+            new EngineRouter([engine], options), options, TestTelemetry(), NullLogger<ExtractionService>.Instance);
 
         var files = new[] { new FileItem { Index = 0, Name = "weird.pdf", Kind = FileKind.Pdf, Bytes = TestBytes.Pdf } };
 
