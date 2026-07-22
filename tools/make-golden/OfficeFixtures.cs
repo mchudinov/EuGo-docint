@@ -96,6 +96,63 @@ public static class OfficeFixtures
         { CellReference = r, StyleIndex = 1U, CellValue = new S.CellValue(date.ToOADate().ToString(CultureInfo.InvariantCulture)) };
     }
 
+    /// <summary>
+    /// A workbook with one normal worksheet plus a chartsheet tab. Chartsheets/dialogsheets (a chart or
+    /// dialog placed on its own tab) are a normal Excel feature: their &lt;sheet&gt; entry resolves via
+    /// GetPartById to a ChartsheetPart/DialogsheetPart, not a WorksheetPart. This fixture proves the
+    /// engine skips that tab with a warning instead of throwing.
+    /// </summary>
+    public static byte[] ChartsheetXlsx()
+    {
+        using var ms = new MemoryStream();
+        using (var doc = SpreadsheetDocument.Create(ms, SpreadsheetDocumentType.Workbook))
+        {
+            var workbookPart = doc.AddWorkbookPart();
+            workbookPart.Workbook = new S.Workbook();
+
+            var shared = workbookPart.AddNewPart<SharedStringTablePart>();
+            shared.SharedStringTable = new S.SharedStringTable();
+            int Str(string s)
+            {
+                var i = 0;
+                foreach (var item in shared.SharedStringTable.Elements<S.SharedStringItem>())
+                {
+                    if (item.InnerText == s) return i;
+                    i++;
+                }
+                shared.SharedStringTable.AppendChild(new S.SharedStringItem(new S.Text(s)));
+                return i;
+            }
+
+            var dataSheet = workbookPart.AddNewPart<WorksheetPart>();
+            dataSheet.Worksheet = new S.Worksheet(new S.SheetData(
+                Row(1, SharedCell("A1", Str("Item")), SharedCell("B1", Str("Count"))),
+                Row(2, SharedCell("A2", Str("Widget")), NumberCell("B2", "7"))));
+
+            var chartsheetPart = workbookPart.AddNewPart<ChartsheetPart>();
+            chartsheetPart.Chartsheet = new S.Chartsheet(
+                new S.ChartSheetProperties(),
+                new S.ChartSheetViews(new S.ChartSheetView { WorkbookViewId = 0 }));
+
+            workbookPart.Workbook.AppendChild(new S.Sheets(
+                new S.Sheet { Id = workbookPart.GetIdOfPart(dataSheet), SheetId = 1U, Name = "Data" },
+                new S.Sheet { Id = workbookPart.GetIdOfPart(chartsheetPart), SheetId = 2U, Name = "Chart1" }));
+            workbookPart.Workbook.Save();
+        }
+        return ms.ToArray();
+
+        static S.Row Row(uint index, params S.Cell[] cells)
+        {
+            var row = new S.Row { RowIndex = index };
+            row.Append(cells);
+            return row;
+        }
+        static S.Cell SharedCell(string r, int sharedIndex) => new()
+        { CellReference = r, DataType = S.CellValues.SharedString, CellValue = new S.CellValue(sharedIndex.ToString()) };
+        static S.Cell NumberCell(string r, string number) => new()
+        { CellReference = r, CellValue = new S.CellValue(number) };
+    }
+
     public static byte[] Pptx(string text)
     {
         using var ms = new MemoryStream();

@@ -12,6 +12,7 @@ public class GoldenFixturesTests
     [InlineData("sample.pptx", FileKind.Pptx)]
     [InlineData("sample.html", FileKind.Html)]
     [InlineData("bom.xlsx", FileKind.Xlsx)]
+    [InlineData("chartsheet.xlsx", FileKind.Xlsx)]
     [InlineData("photo.png", FileKind.Image)]
     [InlineData("corrupt.xlsx", FileKind.Xlsx)]
     public void Fixture_exists_and_detects_as_expected_kind(string name, FileKind expected)

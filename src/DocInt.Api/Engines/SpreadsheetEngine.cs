@@ -35,9 +35,20 @@ public sealed class SpreadsheetEngine : IExtractionEngine
             var sheets = workbookPart.Workbook.Sheets?.Elements<S.Sheet>().ToArray() ?? [];
             foreach (var sheet in sheets)
             {
-                var worksheetPart = (WorksheetPart)workbookPart.GetPartById(sheet.Id!.Value!);
+                var sheetName = sheet.Name?.Value ?? "Sheet";
+                var relationshipId = sheet.Id?.Value;
+                // A <sheet> can point at a chartsheet/dialogsheet (a chart or dialog on its own tab —
+                // a normal Excel feature) instead of a worksheet, and can in principle carry no r:id at
+                // all. Neither is corruption: skip that one tab and keep extracting the rest.
+                if (string.IsNullOrWhiteSpace(relationshipId)
+                    || !workbookPart.TryGetPartById(relationshipId, out var part)
+                    || part is not WorksheetPart worksheetPart)
+                {
+                    warnings.Add($"sheet '{sheetName}' skipped: not a worksheet");
+                    continue;
+                }
                 var rows = ReadRows(worksheetPart, sharedStrings, dateStyles, warnings);
-                tables.Add(new TableResult(sheet.Name?.Value ?? "Sheet", RenderMarkdown(rows), rows));
+                tables.Add(new TableResult(sheetName, RenderMarkdown(rows), rows));
             }
             if (sheets.Length == 0) warnings.Add("workbook has no sheets");
 

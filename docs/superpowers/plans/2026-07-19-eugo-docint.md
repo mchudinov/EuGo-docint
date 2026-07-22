@@ -42,7 +42,7 @@ tests/DocInt.Tests/FileKindDetectorTests.cs · HintsParserTests.cs · MultipartR
 tests/DocInt.Tests/ExtractContractTests.cs · ExtractionServiceTests.cs · GoldenFixturesTests.cs
 tests/DocInt.Tests/SpreadsheetEngineTests.cs · LayoutEngineTests.cs · VisionEngineTests.cs
 tests/DocInt.Tests/TelemetryTests.cs · RedactionTests.cs · LiveSmokeTests.cs
-tests/DocInt.Tests/golden/  (committed binaries: text.pdf scanned.pdf sample.docx sample.pptx sample.html bom.xlsx photo.png corrupt.xlsx unknown.bin)
+tests/DocInt.Tests/golden/  (committed binaries: text.pdf scanned.pdf sample.docx sample.pptx sample.html bom.xlsx chartsheet.xlsx photo.png corrupt.xlsx unknown.bin)
 tools/make-golden/make-golden.csproj · Program.cs · MiniPdf.cs · OfficeFixtures.cs · ImageFixtures.cs
 Dockerfile · .github/workflows/ci.yml · README.md
 ```
@@ -2005,12 +2005,12 @@ git checkout main && git merge step-04-endpoint && git branch -d step-04-endpoin
 ### Task 5: Golden fixture generator + committed fixtures
 
 **Files:**
-- Create: `tools/make-golden/make-golden.csproj`, `tools/make-golden/Program.cs`, `tools/make-golden/MiniPdf.cs`, `tools/make-golden/OfficeFixtures.cs`, `tools/make-golden/ImageFixtures.cs`, `tests/DocInt.Tests/golden/*` (9 committed binaries)
+- Create: `tools/make-golden/make-golden.csproj`, `tools/make-golden/Program.cs`, `tools/make-golden/MiniPdf.cs`, `tools/make-golden/OfficeFixtures.cs`, `tools/make-golden/ImageFixtures.cs`, `tests/DocInt.Tests/golden/*` (10 committed binaries)
 - Modify: `tests/DocInt.Tests/DocInt.Tests.csproj` (copy golden to output), `tests/DocInt.Tests/TestSupport.cs` (add `Golden` helper), `src/DocInt.slnx` (add tool project)
 - Test: `tests/DocInt.Tests/GoldenFixturesTests.cs`
 
 **Interfaces:**
-- Produces: committed fixtures `text.pdf`, `scanned.pdf` (image-only page containing rendered text "OCR TARGET UV400"), `sample.docx` (contains "EuGo DOCX golden document"), `sample.pptx` (contains "EuGo PPTX golden slide"), `sample.html` (contains "EuGo HTML golden"), `bom.xlsx` (sheet "BoM": header row + `["M3 screw", 40, 19.99, =B2*C2 cached 799.6, TRUE, date 2026-07-19]` + `["Washer", 100, 0.125, cached 12.5, FALSE, 2026-01-02]`; sheet "Notes": one string cell), `photo.png` (sunglasses shapes + visible "UV400" text), `corrupt.xlsx` (PK header + garbage), `unknown.bin` (no known magic). Test helper `Golden.Bytes(string name) → byte[]`.
+- Produces: committed fixtures `text.pdf`, `scanned.pdf` (image-only page containing rendered text "OCR TARGET UV400"), `sample.docx` (contains "EuGo DOCX golden document"), `sample.pptx` (contains "EuGo PPTX golden slide"), `sample.html` (contains "EuGo HTML golden"), `bom.xlsx` (sheet "BoM": header row + `["M3 screw", 40, 19.99, =B2*C2 cached 799.6, TRUE, date 2026-07-19]` + `["Washer", 100, 0.125, cached 12.5, FALSE, 2026-01-02]`; sheet "Notes": one string cell), `chartsheet.xlsx` (sheet "Data": header `["Item", "Count"]` + row `["Widget", 7]`, plus a chartsheet tab "Chart1" with a minimal `ChartsheetPart`/no worksheet content — Task 6's skip-non-worksheet-sheet regression fixture), `photo.png` (sunglasses shapes + visible "UV400" text), `corrupt.xlsx` (PK header + garbage), `unknown.bin` (no known magic). Test helper `Golden.Bytes(string name) → byte[]`.
 - The `text.pdf` body text is `EuGo text PDF golden - Part M3 screw UV400` — the redaction test (Task 9) greps logs for this exact string.
 
 - [ ] **Step 1: Branch**
@@ -2048,6 +2048,7 @@ public class GoldenFixturesTests
     [InlineData("sample.pptx", FileKind.Pptx)]
     [InlineData("sample.html", FileKind.Html)]
     [InlineData("bom.xlsx", FileKind.Xlsx)]
+    [InlineData("chartsheet.xlsx", FileKind.Xlsx)]
     [InlineData("photo.png", FileKind.Image)]
     [InlineData("corrupt.xlsx", FileKind.Xlsx)]
     public void Fixture_exists_and_detects_as_expected_kind(string name, FileKind expected)
@@ -2269,6 +2270,63 @@ public static class OfficeFixtures
         { CellReference = r, StyleIndex = 1U, CellValue = new S.CellValue(date.ToOADate().ToString(CultureInfo.InvariantCulture)) };
     }
 
+    /// <summary>
+    /// A workbook with one normal worksheet plus a chartsheet tab. Chartsheets/dialogsheets (a chart or
+    /// dialog placed on its own tab) are a normal Excel feature: their &lt;sheet&gt; entry resolves via
+    /// GetPartById to a ChartsheetPart/DialogsheetPart, not a WorksheetPart. This fixture proves the
+    /// engine skips that tab with a warning instead of throwing.
+    /// </summary>
+    public static byte[] ChartsheetXlsx()
+    {
+        using var ms = new MemoryStream();
+        using (var doc = SpreadsheetDocument.Create(ms, SpreadsheetDocumentType.Workbook))
+        {
+            var workbookPart = doc.AddWorkbookPart();
+            workbookPart.Workbook = new S.Workbook();
+
+            var shared = workbookPart.AddNewPart<SharedStringTablePart>();
+            shared.SharedStringTable = new S.SharedStringTable();
+            int Str(string s)
+            {
+                var i = 0;
+                foreach (var item in shared.SharedStringTable.Elements<S.SharedStringItem>())
+                {
+                    if (item.InnerText == s) return i;
+                    i++;
+                }
+                shared.SharedStringTable.AppendChild(new S.SharedStringItem(new S.Text(s)));
+                return i;
+            }
+
+            var dataSheet = workbookPart.AddNewPart<WorksheetPart>();
+            dataSheet.Worksheet = new S.Worksheet(new S.SheetData(
+                Row(1, SharedCell("A1", Str("Item")), SharedCell("B1", Str("Count"))),
+                Row(2, SharedCell("A2", Str("Widget")), NumberCell("B2", "7"))));
+
+            var chartsheetPart = workbookPart.AddNewPart<ChartsheetPart>();
+            chartsheetPart.Chartsheet = new S.Chartsheet(
+                new S.ChartSheetProperties(),
+                new S.ChartSheetViews(new S.ChartSheetView { WorkbookViewId = 0 }));
+
+            workbookPart.Workbook.AppendChild(new S.Sheets(
+                new S.Sheet { Id = workbookPart.GetIdOfPart(dataSheet), SheetId = 1U, Name = "Data" },
+                new S.Sheet { Id = workbookPart.GetIdOfPart(chartsheetPart), SheetId = 2U, Name = "Chart1" }));
+            workbookPart.Workbook.Save();
+        }
+        return ms.ToArray();
+
+        static S.Row Row(uint index, params S.Cell[] cells)
+        {
+            var row = new S.Row { RowIndex = index };
+            row.Append(cells);
+            return row;
+        }
+        static S.Cell SharedCell(string r, int sharedIndex) => new()
+        { CellReference = r, DataType = S.CellValues.SharedString, CellValue = new S.CellValue(sharedIndex.ToString()) };
+        static S.Cell NumberCell(string r, string number) => new()
+        { CellReference = r, CellValue = new S.CellValue(number) };
+    }
+
     public static byte[] Pptx(string text)
     {
         using var ms = new MemoryStream();
@@ -2473,6 +2531,7 @@ Save("sample.html", Encoding.UTF8.GetBytes(
     + "<table><tr><th>Part</th><th>Qty</th></tr><tr><td>M3 screw</td><td>40</td></tr></table>"
     + "</body></html>"));
 Save("bom.xlsx", OfficeFixtures.BomXlsx());
+Save("chartsheet.xlsx", OfficeFixtures.ChartsheetXlsx());
 Save("photo.png", ImageFixtures.SunglassesPng());
 Save("corrupt.xlsx", [0x50, 0x4B, 0x03, 0x04, .. Enumerable.Repeat((byte)0xDE, 64)]);
 Save("unknown.bin", [.. Enumerable.Range(1, 64).Select(i => (byte)i)]);
@@ -2488,7 +2547,7 @@ dotnet run --project tools/make-golden
 ls -la tests/DocInt.Tests/golden/
 ```
 
-Expected: 9 files listed with non-zero sizes. Spot-check: `file tests/DocInt.Tests/golden/*` should report PDF, Zip/OOXML, PNG, HTML, data.
+Expected: 10 files listed with non-zero sizes. Spot-check: `file tests/DocInt.Tests/golden/*` should report PDF, Zip/OOXML, PNG, HTML, data.
 
 - [ ] **Step 6: Run tests to verify they pass**
 
@@ -2496,7 +2555,7 @@ Expected: 9 files listed with non-zero sizes. Spot-check: `file tests/DocInt.Tes
 dotnet restore src/DocInt.slnx && dotnet build --no-restore src/DocInt.slnx && dotnet test --no-build src/DocInt.slnx
 ```
 
-Expected: PASS (9 new fixture tests).
+Expected: PASS (10 new fixture tests).
 
 - [ ] **Step 7: Gate, commit (binaries included), merge**
 
@@ -2516,8 +2575,8 @@ git checkout main && git merge step-05-golden && git branch -d step-05-golden &&
 - Test: `tests/DocInt.Tests/SpreadsheetEngineTests.cs`
 
 **Interfaces:**
-- Consumes: `IExtractionEngine`, `EngineOutcome`, `Errors`, `FileItem`, golden `bom.xlsx`/`corrupt.xlsx`.
-- Produces: `SpreadsheetEngine : IExtractionEngine` (Kinds = [Xlsx]) — per sheet one `TableResult(sheetName, markdownTable, typedRows)`; `FileResult.Markdown` = all sheets as `## <name>` sections; `PagesProcessed` = sheet count. Typed cells: shared/inline strings → `string`, numbers → `decimal` (fallback `double` on overflow), booleans → `bool`, date-styled numbers (NumberFormatId 14–22, 45–47) → ISO-8601 `string` (`yyyy-MM-dd` when midnight), error cells → `null` + warning, formula without cached value → `null` + warning.
+- Consumes: `IExtractionEngine`, `EngineOutcome`, `Errors`, `FileItem`, golden `bom.xlsx`/`corrupt.xlsx`/`chartsheet.xlsx`.
+- Produces: `SpreadsheetEngine : IExtractionEngine` (Kinds = [Xlsx]) — per worksheet one `TableResult(sheetName, markdownTable, typedRows)`; `FileResult.Markdown` = all worksheets as `## <name>` sections; `PagesProcessed` = worksheet count (`tables.Count`). Typed cells: shared/inline strings → `string`, numbers → `decimal` (fallback `double` on overflow), booleans → `bool`, date-styled numbers (NumberFormatId 14–22, 45–47) → ISO-8601 `string` (`yyyy-MM-dd` when midnight), error cells → `null` + warning, formula without cached value → `null` + warning. A `<sheet>` that isn't a worksheet (chartsheet/dialogsheet — resolves via `GetPartById` to a non-`WorksheetPart`) or that carries no/blank `r:id` is skipped with a warning (`sheet '<name>' skipped: not a worksheet`) instead of throwing — the engine must never throw out of `ExtractAsync`, even for tabs that aren't worksheets.
 
 - [ ] **Step 1: Branch**
 
@@ -2581,6 +2640,24 @@ public class SpreadsheetEngineTests
     {
         var outcome = await Run("corrupt.xlsx");
         Assert.Equal(ErrorCodes.Corrupt, outcome.Result.Error!.Code);
+    }
+
+    [Fact]
+    public async Task Chartsheet_sheet_is_skipped_with_warning_not_thrown()
+    {
+        // Regression: a <sheet> pointing at a chartsheet/dialogsheet resolves via GetPartById to a
+        // non-WorksheetPart; the engine must skip that tab (with a warning) rather than throw, and
+        // must still extract the real worksheet(s) present in the same workbook.
+        var outcome = await Run("chartsheet.xlsx");
+
+        Assert.Null(outcome.Result.Error);
+        var data = Assert.Single(outcome.Result.Tables!);
+        Assert.Equal("Data", data.Name);
+        Assert.Equal(["Item", "Count"], data.Rows[0].Cast<string>().ToArray());
+        Assert.Equal("Widget", data.Rows[1][0]);
+        Assert.Equal(7m, data.Rows[1][1]);
+        Assert.Contains(outcome.Result.Warnings, w => w.Contains("Chart1") && w.Contains("skipped"));
+        Assert.Equal(1, outcome.PagesProcessed);
     }
 
     [Fact]
@@ -2669,9 +2746,20 @@ public sealed class SpreadsheetEngine : IExtractionEngine
             var sheets = workbookPart.Workbook.Sheets?.Elements<S.Sheet>().ToArray() ?? [];
             foreach (var sheet in sheets)
             {
-                var worksheetPart = (WorksheetPart)workbookPart.GetPartById(sheet.Id!.Value!);
+                var sheetName = sheet.Name?.Value ?? "Sheet";
+                var relationshipId = sheet.Id?.Value;
+                // A <sheet> can point at a chartsheet/dialogsheet (a chart or dialog on its own tab —
+                // a normal Excel feature) instead of a worksheet, and can in principle carry no r:id at
+                // all. Neither is corruption: skip that one tab and keep extracting the rest.
+                if (string.IsNullOrWhiteSpace(relationshipId)
+                    || !workbookPart.TryGetPartById(relationshipId, out var part)
+                    || part is not WorksheetPart worksheetPart)
+                {
+                    warnings.Add($"sheet '{sheetName}' skipped: not a worksheet");
+                    continue;
+                }
                 var rows = ReadRows(worksheetPart, sharedStrings, dateStyles, warnings);
-                tables.Add(new TableResult(sheet.Name?.Value ?? "Sheet", RenderMarkdown(rows), rows));
+                tables.Add(new TableResult(sheetName, RenderMarkdown(rows), rows));
             }
             if (sheets.Length == 0) warnings.Add("workbook has no sheets");
 
@@ -2836,7 +2924,7 @@ In `src/DocInt.Api/Program.cs`, insert after `builder.Services.AddSingleton<Extr
 dotnet restore src/DocInt.slnx && dotnet build --no-restore src/DocInt.slnx && dotnet test --no-build src/DocInt.slnx
 ```
 
-Expected: PASS (4 new; all previous still green — the xlsx contract path now runs the real engine).
+Expected: PASS (5 new; all previous still green — the xlsx contract path now runs the real engine).
 
 - [ ] **Step 6: Gate, commit, merge**
 

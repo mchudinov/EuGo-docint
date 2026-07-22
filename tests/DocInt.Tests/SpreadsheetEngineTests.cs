@@ -52,6 +52,24 @@ public class SpreadsheetEngineTests
     }
 
     [Fact]
+    public async Task Chartsheet_sheet_is_skipped_with_warning_not_thrown()
+    {
+        // Regression: a <sheet> pointing at a chartsheet/dialogsheet resolves via GetPartById to a
+        // non-WorksheetPart; the engine must skip that tab (with a warning) rather than throw, and
+        // must still extract the real worksheet(s) present in the same workbook.
+        var outcome = await Run("chartsheet.xlsx");
+
+        Assert.Null(outcome.Result.Error);
+        var data = Assert.Single(outcome.Result.Tables!);
+        Assert.Equal("Data", data.Name);
+        Assert.Equal(["Item", "Count"], data.Rows[0].Cast<string>().ToArray());
+        Assert.Equal("Widget", data.Rows[1][0]);
+        Assert.Equal(7m, data.Rows[1][1]);
+        Assert.Contains(outcome.Result.Warnings, w => w.Contains("Chart1") && w.Contains("skipped"));
+        Assert.Equal(1, outcome.PagesProcessed);
+    }
+
+    [Fact]
     public async Task Http_contract_returns_typed_json_numbers()
     {
         using var factory = new ContractTestFactory();
