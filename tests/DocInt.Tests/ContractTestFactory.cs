@@ -1,10 +1,10 @@
 using DocInt.Api.Contracts;
 using DocInt.Api.Engines;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace DocInt.Tests;
 
-/// <summary>A fake engine per kind group; replaced by real engines task by task.</summary>
 public sealed class FakeEngine(IReadOnlyCollection<FileKind> kinds, Func<FileItem, EngineOutcome> produce)
     : IExtractionEngine
 {
@@ -20,13 +20,24 @@ public sealed class FakeEngine(IReadOnlyCollection<FileKind> kinds, Func<FileIte
         new(new FileResult(f.Name, f.Kind, null, null, description, f.Warnings.ToArray(), null), 1);
 }
 
+public sealed class FakeLayoutClient(
+    LayoutAnalysis? result = null, bool configured = true, Action? thrower = null) : ILayoutAnalysisClient
+{
+    public bool IsConfigured => configured;
+
+    public Task<LayoutAnalysis> AnalyzeAsync(BinaryData content, CancellationToken ct)
+    {
+        thrower?.Invoke();
+        return Task.FromResult(result ?? new LayoutAnalysis("LAYOUT_MD_SENTINEL", 3, []));
+    }
+}
+
 public class ContractTestFactory : DocIntAppFactory
 {
     protected override void ConfigureFakes(IServiceCollection services)
     {
-        services.AddSingleton<IExtractionEngine>(new FakeEngine(
-            [FileKind.Pdf, FileKind.Docx, FileKind.Pptx, FileKind.Html],
-            f => FakeEngine.Markdown(f, "LAYOUT_MD_SENTINEL", 3)));
+        services.RemoveAll<ILayoutAnalysisClient>();
+        services.AddSingleton<ILayoutAnalysisClient>(new FakeLayoutClient());
         services.AddSingleton<IExtractionEngine>(new FakeEngine(
             [FileKind.Image],
             f => FakeEngine.Image(f, "VISION_DESCRIPTION_SENTINEL")));

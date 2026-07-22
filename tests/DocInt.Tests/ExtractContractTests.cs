@@ -113,13 +113,12 @@ public class ExtractContractTests : IClassFixture<ContractTestFactory>
     }
 
     [Fact]
-    public async Task Kind_without_registered_engine_gets_engine_error()
+    public async Task Unconfigured_layout_engine_yields_per_file_engine_unconfigured()
     {
-        using var pdfOnly = new PdfOnlyEngineFactory();
-        using var form = Multipart.Form(("photo.png", TestBytes.Png, "image/png"));
-        var result = await ReadResponse(await pdfOnly.CreateClient().PostAsync("/v1/extract", form));
-        Assert.Equal(ErrorCodes.EngineError, result.Files[0].Error!.Code);
-        Assert.Contains("no engine registered", result.Files[0].Error!.Message);
+        using var bare = new DocIntAppFactory();   // real adapters, no Azure config
+        using var form = Multipart.Form(("manual.pdf", TestBytes.Pdf, "application/pdf"));
+        var result = await ReadResponse(await bare.CreateClient().PostAsync("/v1/extract", form));
+        Assert.Equal(ErrorCodes.EngineUnconfigured, result.Files[0].Error!.Code);
     }
 
     private sealed class CappedFactory : ContractTestFactory
@@ -137,15 +136,6 @@ public class ExtractContractTests : IClassFixture<ContractTestFactory>
         {
             builder.UseSetting("DocInt:MaxFileBytes", "20");
             base.ConfigureWebHost(builder);
-        }
-    }
-
-    private sealed class PdfOnlyEngineFactory : DocIntAppFactory
-    {
-        protected override void ConfigureFakes(Microsoft.Extensions.DependencyInjection.IServiceCollection services)
-        {
-            services.AddSingleton<DocInt.Api.Engines.IExtractionEngine>(new FakeEngine(
-                [FileKind.Pdf], f => FakeEngine.Markdown(f, "x", 1)));
         }
     }
 }

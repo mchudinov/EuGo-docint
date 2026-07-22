@@ -23,6 +23,8 @@ try
     builder.Services.AddSingleton<EngineRouter>();
     builder.Services.AddSingleton<ExtractionService>();
     builder.Services.AddSingleton<IExtractionEngine, SpreadsheetEngine>();
+    builder.Services.AddSingleton<ILayoutAnalysisClient, AzureLayoutAnalysisClient>();
+    builder.Services.AddSingleton<IExtractionEngine, LayoutEngine>();
 
     // Serilog replaces the default logging providers; ServiceDefaults' OTel traces/metrics
     // stay active. Under Aspire (OTEL_EXPORTER_OTLP_ENDPOINT set) also ship logs via OTLP.
