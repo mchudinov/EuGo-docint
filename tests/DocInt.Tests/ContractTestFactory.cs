@@ -32,14 +32,29 @@ public sealed class FakeLayoutClient(
     }
 }
 
+public sealed class FakeVisionClient(
+    string description = "VISION_DESCRIPTION_SENTINEL", bool configured = true) : IVisionChatClient
+{
+    public string? LastSystemPrompt { get; private set; }
+    public string? LastMediaType { get; private set; }
+
+    public bool IsConfigured => configured;
+
+    public Task<string> DescribeImageAsync(string systemPrompt, BinaryData image, string mediaType, CancellationToken ct)
+    {
+        LastSystemPrompt = systemPrompt;
+        LastMediaType = mediaType;
+        return Task.FromResult(description);
+    }
+}
+
 public class ContractTestFactory : DocIntAppFactory
 {
     protected override void ConfigureFakes(IServiceCollection services)
     {
         services.RemoveAll<ILayoutAnalysisClient>();
         services.AddSingleton<ILayoutAnalysisClient>(new FakeLayoutClient());
-        services.AddSingleton<IExtractionEngine>(new FakeEngine(
-            [FileKind.Image],
-            f => FakeEngine.Image(f, "VISION_DESCRIPTION_SENTINEL")));
+        services.RemoveAll<IVisionChatClient>();
+        services.AddSingleton<IVisionChatClient>(new FakeVisionClient());
     }
 }

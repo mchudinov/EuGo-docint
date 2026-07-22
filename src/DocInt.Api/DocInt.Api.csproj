@@ -21,6 +21,9 @@
     <PackageReference Include="DocumentFormat.OpenXml" Version="3.3.0" />
     <PackageReference Include="Azure.AI.DocumentIntelligence" Version="1.0.0" />
     <PackageReference Include="Azure.Identity" Version="1.14.0" />
+    <!-- Brief pinned 2.3.0, which was never published as stable (only 2.3.0-beta.1/2 exist on
+         nuget.org); 2.1.0 is the latest stable release on the 2.x line. -->
+    <PackageReference Include="Azure.AI.OpenAI" Version="2.1.0" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\ServiceDefaults\ServiceDefaults.csproj" />
