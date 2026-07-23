@@ -195,6 +195,59 @@ public class SpreadsheetEngineTests
         Assert.Equal("2", rows[3][1]);
     }
 
+    // --- CellValue branch coverage: the degrade-to-warning and typed paths that the existing
+    // golden fixtures don't already exercise. ---
+
+    [Fact]
+    public async Task Formula_cell_without_cached_value_is_null_with_warning()
+    {
+        var outcome = await Run(BuildXlsx("Calc",
+            Row(1, Str("A1", "label")),
+            Row(2, Str("A2", "sum"), FormulaNoCache("B2", "1+1"))));
+
+        Assert.Null(outcome.Result.Error);
+        Assert.Null(outcome.Result.Tables![0].Rows[1][1]);
+        Assert.Contains(outcome.Result.Warnings,
+            w => w.Contains("B2") && w.Contains("has no cached value"));
+    }
+
+    [Fact]
+    public async Task Error_cell_is_null_with_warning()
+    {
+        var outcome = await Run(BuildXlsx("Errs",
+            Row(1, Str("A1", "label")),
+            Row(2, Str("A2", "div"), ErrorCell("B2", "#DIV/0!"))));
+
+        Assert.Null(outcome.Result.Error);
+        Assert.Null(outcome.Result.Tables![0].Rows[1][1]);
+        Assert.Contains(outcome.Result.Warnings,
+            w => w.Contains("B2") && w.Contains("contains error"));
+    }
+
+    [Fact]
+    public async Task Explicit_date_cell_renders_iso_string()
+    {
+        var outcome = await Run(BuildXlsx("Dates",
+            Row(1, Str("A1", "when")),
+            Row(2, DateCell("A2", "2026-07-19"))));
+
+        Assert.Null(outcome.Result.Error);
+        Assert.Equal("2026-07-19", outcome.Result.Tables![0].Rows[1][0]);
+    }
+
+    [Fact]
+    public async Task Non_finite_double_cell_is_kept_as_raw_text_with_warning()
+    {
+        var outcome = await Run("overflow.xlsx");   // B3 raw <v> is "1e400"
+
+        Assert.Null(outcome.Result.Error);
+        var value = outcome.Result.Tables![0].Rows[2][1];
+        Assert.IsType<string>(value);               // raw-text fallback, never a non-finite double
+        Assert.Equal("1e400", value);
+        Assert.Contains(outcome.Result.Warnings,
+            w => w.Contains("B3") && w.Contains("out of numeric range, kept as text"));
+    }
+
     // --- In-memory XLSX construction: keeps these shapes out of the committed golden fixtures
     // (whose OpenXML generator writes non-deterministic ids), so the fixture set stays stable. ---
 
@@ -225,4 +278,13 @@ public class SpreadsheetEngineTests
 
     private static S.Cell Str(string reference, string text) => new()
     { CellReference = reference, DataType = S.CellValues.String, CellValue = new S.CellValue(text) };
+
+    private static S.Cell FormulaNoCache(string reference, string formula) => new()
+    { CellReference = reference, CellFormula = new S.CellFormula(formula) };
+
+    private static S.Cell ErrorCell(string reference, string code) => new()
+    { CellReference = reference, DataType = S.CellValues.Error, CellValue = new S.CellValue(code) };
+
+    private static S.Cell DateCell(string reference, string value) => new()
+    { CellReference = reference, DataType = S.CellValues.Date, CellValue = new S.CellValue(value) };
 }
