@@ -20,4 +20,10 @@ RUN dotnet publish "DocInt.Api/DocInt.Api.csproj" -c $BUILD_CONFIGURATION -a $TA
 FROM base AS final
 WORKDIR /app
 COPY --from=build /app/publish .
+
+# HEALTHCHECK intentionally omitted: this chiseled base has no shell and no
+# curl/wget, so a classic `HEALTHCHECK CMD curl ...` can't run here, and adding
+# one would mean bloating the image with a shell or an HTTP-probe binary --
+# the opposite of what chiseled buys us. Container health is instead provided
+# by Kubernetes liveness/readiness probes against /healthz (owned by EuGo-infra).
 ENTRYPOINT ["dotnet", "DocInt.Api.dll"]
