@@ -84,6 +84,7 @@ try
 catch (Exception ex)
 {
     Log.Fatal(ex, "DocInt host terminated unexpectedly");
+    Environment.ExitCode = 1;
 }
 finally
 {

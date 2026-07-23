@@ -1,3 +1,4 @@
+using System.Net;
 using DocInt.Api.Contracts;
 using DocInt.Api.Engines;
 
@@ -81,5 +82,74 @@ public class SpreadsheetEngineTests
         Assert.Contains("19.99", json);
         Assert.DoesNotContain("\"19.99\"", json);   // number, not string
         Assert.Contains("\"2026-07-19\"", json);
+    }
+
+    // --- Regression: crafted "1e400" numeric cell must never 500 the request. ---
+    // decimal.Parse overflows (as before); the OverflowException fallback previously
+    // returned double.Parse's result unconditionally, and double.Parse("1e400") yields
+    // double.PositiveInfinity without throwing. That non-finite double used to survive
+    // into the response and crash System.Text.Json serialization outside any try/catch.
+
+    [Fact]
+    public async Task Overflow_cell_is_kept_as_text_with_warning_not_infinity()
+    {
+        var outcome = await Run("overflow.xlsx");
+
+        Assert.Null(outcome.Result.Error);
+        var sheet = Assert.Single(outcome.Result.Tables!);
+        Assert.Equal("normal", sheet.Rows[1][0]);
+        Assert.Equal(42m, sheet.Rows[1][1]);            // sibling row unaffected
+        Assert.Equal("huge", sheet.Rows[2][0]);
+        Assert.Equal("1e400", sheet.Rows[2][1]);         // kept as text, never a non-finite double
+        Assert.Contains(outcome.Result.Warnings,
+            w => w.Contains("B3") && w.Contains("out of numeric range"));
+    }
+
+    [Fact]
+    public async Task Http_contract_returns_200_for_overflow_cell()
+    {
+        using var factory = new ContractTestFactory();
+        using var form = Multipart.Form(("overflow.xlsx", Golden.Bytes("overflow.xlsx"),
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"));
+
+        var response = await factory.CreateClient().PostAsync("/v1/extract", form);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var json = await response.Content.ReadAsStringAsync();
+        Assert.DoesNotContain("\"error\":{", json);
+        Assert.Contains("\"1e400\"", json);
+    }
+
+    // --- Regression: a malformed-but-openable date/numeric cell must degrade to text +
+    // warning on that one cell, not fail the whole file (and must never surface the raw
+    // parse-exception text, which can embed cell content, as the file-level error message). ---
+
+    [Fact]
+    public async Task Malformed_cells_degrade_to_warnings_not_engine_error()
+    {
+        var outcome = await Run("malformed-cells.xlsx");
+
+        Assert.Null(outcome.Result.Error);
+        var sheet = Assert.Single(outcome.Result.Tables!);
+
+        Assert.Equal("good", sheet.Rows[1][0]);
+        Assert.Equal(42m, sheet.Rows[1][1]);
+        Assert.Equal(1m, sheet.Rows[1][2]);
+
+        Assert.Equal("bad number", sheet.Rows[2][0]);
+        Assert.Equal("not-a-number", sheet.Rows[2][1]);  // FormatException on decimal/double.Parse
+        Assert.Equal(2m, sheet.Rows[2][2]);              // sibling cell in the same row intact
+
+        Assert.Equal("bad date", sheet.Rows[3][0]);
+        Assert.Equal("not-a-date", sheet.Rows[3][1]);    // FormatException on DateTime.Parse
+        Assert.Equal(3m, sheet.Rows[3][2]);
+
+        Assert.Equal("bad serial", sheet.Rows[4][0]);
+        Assert.Equal("1e30", sheet.Rows[4][1]);          // ArgumentException on DateTime.FromOADate
+        Assert.Equal(4m, sheet.Rows[4][2]);
+
+        Assert.Contains(outcome.Result.Warnings, w => w.Contains("B3") && w.Contains("number"));
+        Assert.Contains(outcome.Result.Warnings, w => w.Contains("B4") && w.Contains("date"));
+        Assert.Contains(outcome.Result.Warnings, w => w.Contains("B5") && w.Contains("date"));
     }
 }

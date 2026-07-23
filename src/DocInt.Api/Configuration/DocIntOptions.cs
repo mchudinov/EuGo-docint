@@ -40,10 +40,16 @@ public static class OptionsExtensions
                         && o.PerFileTimeoutSeconds > 0 && o.MaxParallelism > 0,
                 "DocInt options must all be positive")
             .ValidateOnStart();
-        builder.Services.Configure<DocumentIntelligenceOptions>(
-            builder.Configuration.GetSection(DocumentIntelligenceOptions.SectionName));
-        builder.Services.Configure<AzureOpenAIOptions>(
-            builder.Configuration.GetSection(AzureOpenAIOptions.SectionName));
+        builder.Services.AddOptions<DocumentIntelligenceOptions>()
+            .Bind(builder.Configuration.GetSection(DocumentIntelligenceOptions.SectionName))
+            .Validate(o => string.IsNullOrWhiteSpace(o.Endpoint) || Uri.TryCreate(o.Endpoint, UriKind.Absolute, out _),
+                $"{DocumentIntelligenceOptions.SectionName}:Endpoint must be an absolute URI")
+            .ValidateOnStart();
+        builder.Services.AddOptions<AzureOpenAIOptions>()
+            .Bind(builder.Configuration.GetSection(AzureOpenAIOptions.SectionName))
+            .Validate(o => string.IsNullOrWhiteSpace(o.Endpoint) || Uri.TryCreate(o.Endpoint, UriKind.Absolute, out _),
+                $"{AzureOpenAIOptions.SectionName}:Endpoint must be an absolute URI")
+            .ValidateOnStart();
         return builder;
     }
 }

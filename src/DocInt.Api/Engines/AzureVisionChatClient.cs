@@ -35,6 +35,19 @@ public sealed class AzureVisionChatClient : IVisionChatClient
                 new UserChatMessage(ChatMessageContentPart.CreateImagePart(image, mediaType))
             ],
             cancellationToken: ct);
-        return completion.Value.Content[0].Text;
+        return ExtractText(completion.Value);
     }
+
+    /// <summary>
+    /// Guards the Content[0] index: an empty/content-filtered model response carries zero
+    /// content parts, which would otherwise throw ArgumentOutOfRangeException straight out of
+    /// the adapter. Throwing InvalidOperationException instead gives the router's generic
+    /// catch-all a clean message to map to a per-file engine_error.
+    /// Public (rather than private) so it is directly unit-testable against a real ChatCompletion
+    /// built via OpenAIChatModelFactory, without mocking the Azure OpenAI SDK's HTTP transport.
+    /// </summary>
+    public static string ExtractText(ChatCompletion completion) =>
+        completion.Content.Count > 0
+            ? completion.Content[0].Text
+            : throw new InvalidOperationException("vision model returned no text content");
 }

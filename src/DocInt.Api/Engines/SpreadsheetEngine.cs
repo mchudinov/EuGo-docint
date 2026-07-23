@@ -137,19 +137,46 @@ public sealed class SpreadsheetEngine : IExtractionEngine
             warnings.Add($"cell {cell.CellReference?.Value} contains error '{raw}'");
             return null;
         }
-        if (dataType == S.CellValues.Date)
-            return Iso(DateTime.Parse(raw, CultureInfo.InvariantCulture));
 
-        // Numeric (no DataType): date-styled → ISO string, otherwise decimal (double on overflow).
-        if (cell.StyleIndex?.Value is { } style && dateStyles.Contains(style))
-            return Iso(DateTime.FromOADate(double.Parse(raw, CultureInfo.InvariantCulture)));
+        // Cells reaching here are malformed-but-openable when parsing throws: the workbook is a
+        // valid package (that's ExtractCore's "corrupt" case), but a single cell's stored text
+        // doesn't parse as the type its own DataType/style declares (garbage date text, a numeric
+        // serial out of DateTime.FromOADate's range, non-numeric text in an untyped numeric cell).
+        // Degrade that one cell to its raw text + a warning naming the cell — never let the
+        // exception (which can embed the cell's own content) escape the engine, and never fail
+        // the rest of an otherwise-good file over one bad cell.
+        var isDateStyled = cell.StyleIndex?.Value is { } style && dateStyles.Contains(style);
         try
         {
-            return decimal.Parse(raw, NumberStyles.Float, CultureInfo.InvariantCulture);
+            if (dataType == S.CellValues.Date)
+                return Iso(DateTime.Parse(raw, CultureInfo.InvariantCulture));
+
+            // Numeric (no DataType): date-styled → ISO string, otherwise decimal (double on overflow).
+            if (isDateStyled)
+                return Iso(DateTime.FromOADate(double.Parse(raw, CultureInfo.InvariantCulture)));
+
+            try
+            {
+                return decimal.Parse(raw, NumberStyles.Float, CultureInfo.InvariantCulture);
+            }
+            catch (OverflowException)
+            {
+                // decimal.MaxValue is ~7.9e28; double covers a much wider finite range before
+                // overflowing to +/-Infinity. A finite double (e.g. 1e29) is still the exact
+                // stored value, so keep returning it as before. A non-finite double (e.g. the
+                // 1e400 repro) can never reach System.Text.Json — it throws on non-finite
+                // numbers outside any router try/catch — so fall back to the raw text instead.
+                var overflowed = double.Parse(raw, CultureInfo.InvariantCulture);
+                if (double.IsFinite(overflowed)) return overflowed;
+                warnings.Add($"cell {cell.CellReference?.Value} value out of numeric range, kept as text");
+                return raw;
+            }
         }
-        catch (OverflowException)
+        catch (Exception ex) when (ex is FormatException or ArgumentException or OverflowException)
         {
-            return double.Parse(raw, CultureInfo.InvariantCulture);
+            var kind = dataType == S.CellValues.Date || isDateStyled ? "date" : "number";
+            warnings.Add($"cell {cell.CellReference?.Value} could not be parsed as a {kind}, kept as text");
+            return raw;
         }
     }
 

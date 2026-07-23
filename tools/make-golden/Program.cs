@@ -23,6 +23,8 @@ Save("sample.html", Encoding.UTF8.GetBytes(
     + "</body></html>"));
 Save("bom.xlsx", OfficeFixtures.BomXlsx());
 Save("chartsheet.xlsx", OfficeFixtures.ChartsheetXlsx());
+Save("overflow.xlsx", OfficeFixtures.OverflowXlsx());
+Save("malformed-cells.xlsx", OfficeFixtures.MalformedCellsXlsx());
 Save("photo.png", ImageFixtures.SunglassesPng());
 Save("corrupt.xlsx", [0x50, 0x4B, 0x03, 0x04, .. Enumerable.Repeat((byte)0xDE, 64)]);
 Save("unknown.bin", [.. Enumerable.Range(1, 64).Select(i => (byte)i)]);
