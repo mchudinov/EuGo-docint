@@ -174,6 +174,27 @@ public class SpreadsheetEngineTests
         Assert.DoesNotContain("line1\nline2", outcome.Result.Markdown);
     }
 
+    // --- Interior row-gap fidelity: a blank row between two populated rows must survive as an
+    // all-null row rather than collapsing (leading gaps are not synthesized; trailing rows are
+    // still trimmed). ---
+
+    [Fact]
+    public async Task Interior_blank_row_is_preserved_as_all_null_row()
+    {
+        var outcome = await Run(BuildXlsx("Gapped",
+            Row(1, Str("A1", "Part"), Str("B1", "Qty")),
+            Row(2, Str("A2", "x"), Str("B2", "1")),
+            Row(4, Str("A4", "y"), Str("B4", "2"))));   // row 3 is blank
+
+        Assert.Null(outcome.Result.Error);
+        var rows = outcome.Result.Tables![0].Rows;
+        Assert.Equal(4, rows.Count);
+        Assert.Equal("x", rows[1][0]);
+        Assert.True(rows[2].All(v => v is null));       // the missing row 3 surfaces as all-null
+        Assert.Equal("y", rows[3][0]);
+        Assert.Equal("2", rows[3][1]);
+    }
+
     // --- In-memory XLSX construction: keeps these shapes out of the committed golden fixtures
     // (whose OpenXML generator writes non-deterministic ids), so the fixture set stays stable. ---
 
