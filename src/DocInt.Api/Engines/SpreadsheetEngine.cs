@@ -100,11 +100,18 @@ public sealed class SpreadsheetEngine : IExtractionEngine
             rawRows.Add((row.RowIndex?.Value ?? (uint)(rawRows.Count + 1), cells));
         }
 
-        foreach (var (_, cells) in rawRows)
+        // Materialize in row-index order, preserving interior gaps: a blank row between two
+        // populated rows surfaces as an all-null row of width maxColumns. Leading rows (before
+        // the first populated row) are never synthesized; trailing all-null rows are trimmed below.
+        uint? previousIndex = null;
+        foreach (var (index, cells) in rawRows.OrderBy(r => r.Index))
         {
+            if (previousIndex is { } previous)
+                for (var gap = previous + 1; gap < index; gap++) grid.Add(new object?[maxColumns]);
             var materialized = new object?[maxColumns];
             foreach (var (column, value) in cells) materialized[column] = value;
             grid.Add(materialized);
+            previousIndex = index;
         }
         // Trim trailing all-null rows.
         while (grid.Count > 0 && grid[^1].All(v => v is null)) grid.RemoveAt(grid.Count - 1);
