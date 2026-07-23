@@ -1,15 +1,21 @@
 using System.Net;
 using DocInt.Api.Contracts;
 using DocInt.Api.Engines;
+using DocumentFormat.OpenXml;
+using DocumentFormat.OpenXml.Packaging;
+using S = DocumentFormat.OpenXml.Spreadsheet;
 
 namespace DocInt.Tests;
 
 public class SpreadsheetEngineTests
 {
-    private static async Task<EngineOutcome> Run(string fixture)
+    private static async Task<EngineOutcome> Run(string fixture) =>
+        await Run(Golden.Bytes(fixture), fixture);
+
+    private static async Task<EngineOutcome> Run(byte[] bytes, string name = "mem.xlsx")
     {
         var engine = new SpreadsheetEngine();
-        var item = new FileItem { Index = 0, Name = fixture, Kind = FileKind.Xlsx, Bytes = Golden.Bytes(fixture) };
+        var item = new FileItem { Index = 0, Name = name, Kind = FileKind.Xlsx, Bytes = bytes };
         return await engine.ExtractAsync(item, CancellationToken.None);
     }
 
@@ -152,4 +158,50 @@ public class SpreadsheetEngineTests
         Assert.Contains(outcome.Result.Warnings, w => w.Contains("B4") && w.Contains("date"));
         Assert.Contains(outcome.Result.Warnings, w => w.Contains("B5") && w.Contains("date"));
     }
+
+    // --- Newline escaping: a cell value with an embedded CR/LF must stay inside its own
+    // Markdown table row (a raw newline in a "| ... |" row terminates the row). ---
+
+    [Fact]
+    public async Task Embedded_newline_in_cell_renders_as_br_on_a_single_row()
+    {
+        var outcome = await Run(BuildXlsx("Notes",
+            Row(1, Str("A1", "Note")),
+            Row(2, Str("A2", "line1\nline2"))));
+
+        Assert.Null(outcome.Result.Error);
+        Assert.Contains("| line1<br>line2 |", outcome.Result.Markdown);
+        Assert.DoesNotContain("line1\nline2", outcome.Result.Markdown);
+    }
+
+    // --- In-memory XLSX construction: keeps these shapes out of the committed golden fixtures
+    // (whose OpenXML generator writes non-deterministic ids), so the fixture set stays stable. ---
+
+    private static byte[] BuildXlsx(string sheetName, params S.Row[] rows)
+    {
+        using var ms = new MemoryStream();
+        using (var doc = SpreadsheetDocument.Create(ms, SpreadsheetDocumentType.Workbook))
+        {
+            var workbookPart = doc.AddWorkbookPart();
+            workbookPart.Workbook = new S.Workbook();
+            var sheetPart = workbookPart.AddNewPart<WorksheetPart>();
+            var sheetData = new S.SheetData();
+            foreach (var row in rows) sheetData.Append(row);
+            sheetPart.Worksheet = new S.Worksheet(sheetData);
+            workbookPart.Workbook.AppendChild(new S.Sheets(
+                new S.Sheet { Id = workbookPart.GetIdOfPart(sheetPart), SheetId = 1U, Name = sheetName }));
+            workbookPart.Workbook.Save();
+        }
+        return ms.ToArray();
+    }
+
+    private static S.Row Row(uint index, params S.Cell[] cells)
+    {
+        var row = new S.Row { RowIndex = index };
+        row.Append(cells);
+        return row;
+    }
+
+    private static S.Cell Str(string reference, string text) => new()
+    { CellReference = reference, DataType = S.CellValues.String, CellValue = new S.CellValue(text) };
 }

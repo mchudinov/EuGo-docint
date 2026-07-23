@@ -221,7 +221,9 @@ public sealed class SpreadsheetEngine : IExtractionEngine
             bool b => b ? "true" : "false",
             decimal d => d.ToString(CultureInfo.InvariantCulture),
             double d => d.ToString(CultureInfo.InvariantCulture),
-            string s => s.Replace("|", "\\|"),
+            // Escape pipes, then fold embedded CR/LF to <br> — a raw newline inside a
+            // "| ... |" row terminates the row and corrupts the whole table.
+            string s => s.Replace("|", "\\|").Replace("\r\n", "<br>").Replace("\r", "<br>").Replace("\n", "<br>"),
             _ => Convert.ToString(value, CultureInfo.InvariantCulture) ?? ""
         };
     }
