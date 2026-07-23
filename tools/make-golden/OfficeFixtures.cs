@@ -153,6 +153,129 @@ public static class OfficeFixtures
         { CellReference = r, CellValue = new S.CellValue(number) };
     }
 
+    /// <summary>
+    /// One sheet, one numeric cell whose raw &lt;v&gt; text is "1e400": a value decimal.Parse
+    /// overflows on, and whose OverflowException fallback (double.Parse) yields
+    /// double.PositiveInfinity rather than throwing. Regression fixture for the
+    /// SpreadsheetEngine non-finite-double guard (kept as text, never handed to
+    /// System.Text.Json, which throws on non-finite doubles).
+    /// </summary>
+    public static byte[] OverflowXlsx()
+    {
+        using var ms = new MemoryStream();
+        using (var doc = SpreadsheetDocument.Create(ms, SpreadsheetDocumentType.Workbook))
+        {
+            var workbookPart = doc.AddWorkbookPart();
+            workbookPart.Workbook = new S.Workbook();
+
+            var shared = workbookPart.AddNewPart<SharedStringTablePart>();
+            shared.SharedStringTable = new S.SharedStringTable();
+            int Str(string s)
+            {
+                var i = 0;
+                foreach (var item in shared.SharedStringTable.Elements<S.SharedStringItem>())
+                {
+                    if (item.InnerText == s) return i;
+                    i++;
+                }
+                shared.SharedStringTable.AppendChild(new S.SharedStringItem(new S.Text(s)));
+                return i;
+            }
+
+            var sheet = workbookPart.AddNewPart<WorksheetPart>();
+            sheet.Worksheet = new S.Worksheet(new S.SheetData(
+                Row(1, SharedCell("A1", Str("Label")), SharedCell("B1", Str("Value"))),
+                Row(2, SharedCell("A2", Str("normal")), NumberCell("B2", "42")),
+                Row(3, SharedCell("A3", Str("huge")), NumberCell("B3", "1e400"))));
+
+            workbookPart.Workbook.AppendChild(new S.Sheets(
+                new S.Sheet { Id = workbookPart.GetIdOfPart(sheet), SheetId = 1U, Name = "Overflow" }));
+            workbookPart.Workbook.Save();
+        }
+        return ms.ToArray();
+
+        static S.Row Row(uint index, params S.Cell[] cells)
+        {
+            var row = new S.Row { RowIndex = index };
+            row.Append(cells);
+            return row;
+        }
+        static S.Cell SharedCell(string r, int sharedIndex) => new()
+        { CellReference = r, DataType = S.CellValues.SharedString, CellValue = new S.CellValue(sharedIndex.ToString()) };
+        static S.Cell NumberCell(string r, string number) => new()
+        { CellReference = r, CellValue = new S.CellValue(number) };
+    }
+
+    /// <summary>
+    /// One sheet, one malformed-but-openable cell per row: a plain numeric cell with
+    /// non-numeric raw text, an explicit-Date cell with unparseable raw text, and a
+    /// date-styled numeric cell whose raw text is a legal number but out of
+    /// DateTime.FromOADate's range. Each row also carries a sibling "Control" cell to prove
+    /// the rest of the row/sheet survives one bad cell. Regression fixture for the
+    /// SpreadsheetEngine per-cell parse-exception guard (degrades to text + warning,
+    /// never throws out of the engine).
+    /// </summary>
+    public static byte[] MalformedCellsXlsx()
+    {
+        using var ms = new MemoryStream();
+        using (var doc = SpreadsheetDocument.Create(ms, SpreadsheetDocumentType.Workbook))
+        {
+            var workbookPart = doc.AddWorkbookPart();
+            workbookPart.Workbook = new S.Workbook();
+
+            var stylesPart = workbookPart.AddNewPart<WorkbookStylesPart>();
+            stylesPart.Stylesheet = new S.Stylesheet(
+                new S.Fonts(new S.Font()),
+                new S.Fills(new S.Fill()),
+                new S.Borders(new S.Border()),
+                new S.CellFormats(
+                    new S.CellFormat(),
+                    new S.CellFormat { NumberFormatId = 14, ApplyNumberFormat = true }));
+
+            var shared = workbookPart.AddNewPart<SharedStringTablePart>();
+            shared.SharedStringTable = new S.SharedStringTable();
+            int Str(string s)
+            {
+                var i = 0;
+                foreach (var item in shared.SharedStringTable.Elements<S.SharedStringItem>())
+                {
+                    if (item.InnerText == s) return i;
+                    i++;
+                }
+                shared.SharedStringTable.AppendChild(new S.SharedStringItem(new S.Text(s)));
+                return i;
+            }
+
+            var sheet = workbookPart.AddNewPart<WorksheetPart>();
+            sheet.Worksheet = new S.Worksheet(new S.SheetData(
+                Row(1, SharedCell("A1", Str("Label")), SharedCell("B1", Str("Value")), SharedCell("C1", Str("Control"))),
+                Row(2, SharedCell("A2", Str("good")), NumberCell("B2", "42"), NumberCell("C2", "1")),
+                Row(3, SharedCell("A3", Str("bad number")), NumberCell("B3", "not-a-number"), NumberCell("C3", "2")),
+                Row(4, SharedCell("A4", Str("bad date")), DateTypeCell("B4", "not-a-date"), NumberCell("C4", "3")),
+                Row(5, SharedCell("A5", Str("bad serial")), DateStyledNumberCell("B5", "1e30"), NumberCell("C5", "4"))));
+
+            workbookPart.Workbook.AppendChild(new S.Sheets(
+                new S.Sheet { Id = workbookPart.GetIdOfPart(sheet), SheetId = 1U, Name = "Cells" }));
+            workbookPart.Workbook.Save();
+        }
+        return ms.ToArray();
+
+        static S.Row Row(uint index, params S.Cell[] cells)
+        {
+            var row = new S.Row { RowIndex = index };
+            row.Append(cells);
+            return row;
+        }
+        static S.Cell SharedCell(string r, int sharedIndex) => new()
+        { CellReference = r, DataType = S.CellValues.SharedString, CellValue = new S.CellValue(sharedIndex.ToString()) };
+        static S.Cell NumberCell(string r, string number) => new()
+        { CellReference = r, CellValue = new S.CellValue(number) };
+        static S.Cell DateTypeCell(string r, string raw) => new()
+        { CellReference = r, DataType = S.CellValues.Date, CellValue = new S.CellValue(raw) };
+        static S.Cell DateStyledNumberCell(string r, string raw) => new()
+        { CellReference = r, StyleIndex = 1U, CellValue = new S.CellValue(raw) };
+    }
+
     public static byte[] Pptx(string text)
     {
         using var ms = new MemoryStream();

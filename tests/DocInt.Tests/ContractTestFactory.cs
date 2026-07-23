@@ -15,9 +15,6 @@ public sealed class FakeEngine(IReadOnlyCollection<FileKind> kinds, Func<FileIte
 
     public static EngineOutcome Markdown(FileItem f, string markdown, int pages) =>
         new(new FileResult(f.Name, f.Kind, markdown, null, null, f.Warnings.ToArray(), null), pages);
-
-    public static EngineOutcome Image(FileItem f, string description) =>
-        new(new FileResult(f.Name, f.Kind, null, null, description, f.Warnings.ToArray(), null), 1);
 }
 
 public sealed class FakeLayoutClient(
