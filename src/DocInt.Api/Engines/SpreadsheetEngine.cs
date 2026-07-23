@@ -14,6 +14,14 @@ public sealed class SpreadsheetEngine : IExtractionEngine
 {
     public IReadOnlyCollection<FileKind> Kinds { get; } = [FileKind.Xlsx];
 
+    /// <summary>
+    /// Hard cap on the total empty rows synthesized to preserve interior blank-row gaps within a
+    /// single sheet. A row's index is untrusted (a uint read straight from the file), so without a
+    /// bound a two-row file with a huge <c>r=</c> delta could allocate billions of rows and OOM the
+    /// process; this keeps worst-case synthesis to a few MB while far exceeding any real section gap.
+    /// </summary>
+    public const int MaxSyntheticGapRows = 4096;
+
     public Task<EngineOutcome> ExtractAsync(FileItem file, CancellationToken ct) =>
         Task.FromResult(ExtractCore(file));
 
@@ -103,11 +111,29 @@ public sealed class SpreadsheetEngine : IExtractionEngine
         // Materialize in row-index order, preserving interior gaps: a blank row between two
         // populated rows surfaces as an all-null row of width maxColumns. Leading rows (before
         // the first populated row) are never synthesized; trailing all-null rows are trimmed below.
+        // RowIndex is untrusted, so the total synthesized empties per sheet are capped: a crafted
+        // huge r= delta would otherwise allocate billions of rows and OOM the process. Past the cap
+        // we stop expanding gaps and add one warning (degrade, never throw) — real section gaps are
+        // orders of magnitude below the cap, so this never touches legitimate spreadsheets.
         uint? previousIndex = null;
+        var gapBudget = MaxSyntheticGapRows;
+        var gapLimitWarned = false;
         foreach (var (index, cells) in rawRows.OrderBy(r => r.Index))
         {
-            if (previousIndex is { } previous)
-                for (var gap = previous + 1; gap < index; gap++) grid.Add(new object?[maxColumns]);
+            if (previousIndex is { } previous && index - previous > 1)
+            {
+                var gap = index - previous - 1;
+                var truncated = gap > (uint)gapBudget;
+                var take = truncated ? gapBudget : (int)gap;
+                for (var i = 0; i < take; i++) grid.Add(new object?[maxColumns]);
+                gapBudget -= take;
+                if (truncated && !gapLimitWarned)
+                {
+                    warnings.Add($"row gap after row {previous} exceeds the {MaxSyntheticGapRows}-row "
+                        + "preservation limit; remaining blank rows not expanded");
+                    gapLimitWarned = true;
+                }
+            }
             var materialized = new object?[maxColumns];
             foreach (var (column, value) in cells) materialized[column] = value;
             grid.Add(materialized);

@@ -195,6 +195,26 @@ public class SpreadsheetEngineTests
         Assert.Equal("2", rows[3][1]);
     }
 
+    // --- Bounded gap synthesis: RowIndex is attacker-controlled, so a huge r= delta must not
+    // synthesize an unbounded run of empty rows (OOM). Cap it, warn once, keep extracting. ---
+
+    [Fact]
+    public async Task Huge_row_gap_is_bounded_and_warns_instead_of_exhausting_memory()
+    {
+        // Populated rows at r=1 and r=2,000,000: an unbounded loop would allocate ~2M empty rows.
+        var outcome = await Run(BuildXlsx("Huge",
+            Row(1, Str("A1", "first")),
+            Row(2_000_000, Str("A2000000", "last"))));
+
+        Assert.Null(outcome.Result.Error);
+        var rows = outcome.Result.Tables![0].Rows;
+        Assert.True(rows.Count <= SpreadsheetEngine.MaxSyntheticGapRows + 2,
+            $"grid had {rows.Count} rows; expected <= cap ({SpreadsheetEngine.MaxSyntheticGapRows}) + 2 populated");
+        Assert.Equal("first", rows[0][0]);
+        Assert.Equal("last", rows[^1][0]);
+        Assert.Contains(outcome.Result.Warnings, w => w.Contains("preservation limit"));
+    }
+
     // --- CellValue branch coverage: the degrade-to-warning and typed paths that the existing
     // golden fixtures don't already exercise. ---
 
